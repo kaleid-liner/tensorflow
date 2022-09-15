@@ -242,7 +242,6 @@ Subgraph::Subgraph(ErrorReporter* error_reporter,
       resources_(resources),
       resource_ids_(resource_ids),
       initialization_status_map_(initialization_status_map),
-      cpu_thread_(1, 7),
       dsp_thread_(1, 4) {
   context_.impl_ = static_cast<void*>(this);
   context_.ResizeTensor = ResizeTensor;
@@ -1191,7 +1190,7 @@ TfLiteStatus Subgraph::Invoke() {
 
   // jianyu: Starting working threads for CPU and DSP
   mp_flags_.resize(execution_plan_.size(), 0);
-  std::future<void> cpu_future, dsp_future;
+  std::future<void> dsp_future;
   unsigned char state = kMPFlagSeq;
 
   // Invocations are always done in node order.
@@ -1289,7 +1288,6 @@ TfLiteStatus Subgraph::Invoke() {
       }
       state = kMPFlagStart;
     } else if (mp_flag & kMPFlagEnd) {
-      cpu_future.wait();
       dsp_future.wait();
       if (OpInvoke(registration, &node) != kTfLiteOk) {
         return ReportOpError(&context_, node, registration, node_index,
@@ -1300,9 +1298,10 @@ TfLiteStatus Subgraph::Invoke() {
       switch (state) {
         case kMPFlagStart:
           if (mp_flag & kMPFlagCpu) {
-            cpu_future = cpu_thread_.push([&registration, context=&context_, node=&node](int){ 
-              registration.invoke(context, node);
-            });
+            if (OpInvoke(registration, &node) != kTfLiteOk) {
+              return ReportOpError(&context_, node, registration, node_index,
+                                  "failed to invoke");
+            }
           } else if (mp_flag & kMPFlagDsp) {
             dsp_future = dsp_thread_.push([&registration, context=&context_, node=&node](int){ 
               registration.invoke(context, node);

@@ -777,7 +777,7 @@ class Subgraph {
   };
   std::vector<unsigned char> mp_flags_;
 
-  ctpl::thread_pool cpu_thread_, dsp_thread_;
+  ctpl::thread_pool dsp_thread_;
 
   // The error reporter delegate that tflite will forward queries errors to.
   ErrorReporter* error_reporter_;
