@@ -389,7 +389,9 @@ TfLiteStatus Interpreter::ModifyGraphWithDelegateImpl(
     if (IsValidationSubgraph(subgraph->GetName().c_str())) {
       continue;
     }
+    TF_LITE_KERNEL_LOG(context_, "In modifyGraphWithDelegateImpl");
     status = subgraph->ModifyGraphWithDelegate(delegate);
+    TF_LITE_KERNEL_LOG(context_, "after modifyGraphWithDelegate");
     if (status != kTfLiteOk) {
       break;
     }

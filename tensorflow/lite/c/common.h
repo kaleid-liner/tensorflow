@@ -702,6 +702,11 @@ typedef struct TfLiteContext {
   TfLiteStatus (*GetExecutionPlan)(struct TfLiteContext* context,
                                    TfLiteIntArray** execution_plan);
 
+  // jianyu
+  TfLiteStatus (*GetNodeName)(
+      struct TfLiteContext* context,
+      const TfLiteNode* node, char** node_name);
+
   // An array of tensors in the interpreter context (of length `tensors_size`)
   TfLiteTensor* tensors;
 

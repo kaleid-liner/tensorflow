@@ -52,6 +52,7 @@ TfLiteStatus CreateNewTensorWithDifferentType(TfLiteContext* context,
 TfLiteStatus GraphPartitionHelper::Partition(
     std::set<std::string>* unsupported_nodes_info) {
   const auto prepare_status = PrepareSupportedNodes(unsupported_nodes_info);
+  TF_LITE_KERNEL_LOG(context_, "In Partition");
   if (prepare_status != kTfLiteOk) return prepare_status;
 
   TfLiteDelegateParams* partition_params_array_ = nullptr;

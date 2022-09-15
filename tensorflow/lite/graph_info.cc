@@ -16,6 +16,7 @@ limitations under the License.
 
 #include <algorithm>
 #include <vector>
+#include <iostream>
 
 #include "tensorflow/lite/c/common.h"
 #include "tensorflow/lite/context_util.h"
@@ -246,6 +247,14 @@ TfLiteStatus PartitionGraphIntoIndependentNodeSubsets(
   PartitionGraphIntoIndependentNodeSubsetsImpl(info, nodes_to_partition,
                                                node_subsets)
       .Partition();
+  // author:fu
+  std::cout << "node_subsets info: " << std::endl;
+  for(int i = 0; i < node_subsets->size(); ++i){
+    for(int j = 0; j < (*node_subsets)[i].nodes.size(); ++j){
+      std::cout << (*node_subsets)[i].nodes[j] << " " << std::endl;
+    }
+    std::cout << std::endl;
+  }
   return kTfLiteOk;
 }
 

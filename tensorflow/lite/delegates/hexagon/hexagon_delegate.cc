@@ -55,6 +55,13 @@ class HexagonDelegate : public SimpleDelegateInterface {
   bool IsNodeSupportedByDelegate(const TfLiteRegistration* registration,
                                  const TfLiteNode* node,
                                  TfLiteContext* context) const override {
+    char* node_name;
+    context->GetNodeName(context, node, &node_name);
+    bool dsp_assigned = strstr(node_name, "dsp") != nullptr;
+    delete [] node_name;
+    if (!dsp_assigned) {
+      return false;
+    }
     return IsNodeSupportedByHexagon(registration, node, context);
   }
 

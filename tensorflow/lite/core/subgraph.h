@@ -36,6 +36,7 @@ limitations under the License.
 #include "tensorflow/lite/graph_info.h"
 #include "tensorflow/lite/memory_planner.h"
 #include "tensorflow/lite/util.h"
+#include "tensorflow/lite/ctpl_stl.h"
 
 namespace tflite {
 
@@ -576,6 +577,12 @@ class Subgraph {
   static TfLiteStatus GetExecutionPlan(struct TfLiteContext* context,
                                        TfLiteIntArray** execution_plan);
 
+  // jianyu
+  TfLiteStatus GetNodeName(const TfLiteNode* node, char** node_name);
+
+  // jianyu
+  static TfLiteStatus GetNodeName(struct TfLiteContext* context, const TfLiteNode* node, char** node_name);
+
   // WARNING: This is an experimental interface that is subject to change.
   // Provides a preview of post-delegation partitioning. Each
   // TfLiteDelegateParams in the referenced array corresponds to one instance of
@@ -758,6 +765,19 @@ class Subgraph {
 
   // Array of indices representing the tensors that are variable tensors.
   std::vector<int> variables_;
+
+  // jianyu
+  enum MPFlag {
+    kMPFlagCpu   = 0x01,
+    kMPFlagGpu   = 0x02,
+    kMPFlagDsp   = 0x04,
+    kMPFlagStart = 0x08,
+    kMPFlagEnd   = 0x10,
+    kMPFlagSeq   = 0x20
+  };
+  std::vector<unsigned char> mp_flags_;
+
+  ctpl::thread_pool cpu_thread_, dsp_thread_;
 
   // The error reporter delegate that tflite will forward queries errors to.
   ErrorReporter* error_reporter_;

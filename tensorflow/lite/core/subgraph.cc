@@ -27,6 +27,8 @@ limitations under the License.
 #include <string>
 #include <utility>
 #include <vector>
+#include <chrono>
+#include <iostream>
 
 #include "tensorflow/lite/allocation.h"
 #include "tensorflow/lite/builtin_ops.h"
@@ -48,6 +50,7 @@ limitations under the License.
 #else
 #include "tensorflow/lite/arena_planner.h"
 #endif
+#include "tensorflow/lite/sxr_thread.h"
 
 namespace tflite {
 
@@ -238,7 +241,9 @@ Subgraph::Subgraph(ErrorReporter* error_reporter,
       subgraphs_(subgraphs),
       resources_(resources),
       resource_ids_(resource_ids),
-      initialization_status_map_(initialization_status_map) {
+      initialization_status_map_(initialization_status_map),
+      cpu_thread_(1, 7),
+      dsp_thread_(1, 4) {
   context_.impl_ = static_cast<void*>(this);
   context_.ResizeTensor = ResizeTensor;
   context_.ReportError = ReportErrorC;
@@ -253,10 +258,13 @@ Subgraph::Subgraph(ErrorReporter* error_reporter,
   context_.GetTensor = nullptr;
   context_.GetEvalTensor = nullptr;
   context_.GetModelMetadata = GetModelMetadata;
+  context_.GetNodeName = GetNodeName;
 
   // Reserve some space for the tensors to avoid excessive resizing.
   tensors_.reserve(kTensorsReservedCapacity);
   nodes_and_registration_.reserve(kTensorsReservedCapacity);
+  // jianyu: set dispatch thread affinity
+  // sxr::setCurrentThreadAffinityMask(7);
   // Invalid to call these except from TfLiteDelegate
   SwitchToKernelContext();
 }
@@ -521,6 +529,30 @@ TfLiteStatus Subgraph::GetExecutionPlan(struct TfLiteContext* context,
       ->GetExecutionPlan(execution_plan);
 }
 
+// jianyu
+TfLiteStatus Subgraph::GetNodeName(const TfLiteNode* node, char** node_name) {
+  const auto outputs = node->outputs;
+  std::string tensor_name;
+  const auto output_tensor = tensor(outputs->data[0]);
+  if (output_tensor == nullptr || output_tensor->name == nullptr) {
+    tensor_name = "Unknown";
+  } else {
+    tensor_name = output_tensor->name;
+  }
+  tensor_name = tensor_name.substr(0, tensor_name.find_first_of(';'));
+  *node_name = new char[tensor_name.length() + 1];
+  size_t len = tensor_name.copy(*node_name, tensor_name.length(), 0);
+  (*node_name)[len] = '\0';
+  return kTfLiteOk;
+}
+
+// jianyu
+TfLiteStatus Subgraph::GetNodeName(struct TfLiteContext* context, 
+                                   const TfLiteNode* node, char** node_name) {
+  return static_cast<Subgraph*>(context->impl_)
+      ->GetNodeName(node, node_name);
+}
+
 void Subgraph::FreeDelegatePartitioningData() {
   for (auto& params : partitioning_preview_cache_) {
     TfLiteIntArrayFree(params.nodes_to_replace);
@@ -636,6 +668,7 @@ bool Subgraph::IsCancelled() {
 
 void Subgraph::ReserveNodes(int count) {
   nodes_and_registration_.reserve(count);
+  mp_flags_.reserve(count);
 }
 
 TfLiteStatus Subgraph::CheckTensorIndices(const char* label, const int* indices,
@@ -1156,6 +1189,11 @@ TfLiteStatus Subgraph::Invoke() {
   }
   TFLITE_SCOPED_TAGGED_DEFAULT_PROFILE(profiler_.get(), "Invoke");
 
+  // jianyu: Starting working threads for CPU and DSP
+  mp_flags_.resize(execution_plan_.size(), 0);
+  std::future<void> cpu_future, dsp_future;
+  unsigned char state = kMPFlagSeq;
+
   // Invocations are always done in node order.
   // Note that calling Invoke repeatedly will cause the original memory plan to
   // be reused, unless either ResizeInputTensor() or AllocateTensors() has been
@@ -1175,6 +1213,32 @@ TfLiteStatus Subgraph::Invoke() {
     const char* op_name = nullptr;
     if (profiler_) op_name = GetTFLiteOpName(registration);
     TFLITE_SCOPED_TAGGED_OPERATOR_PROFILE(profiler_.get(), op_name, node_index);
+
+    // jianyu: assign device and plan execution according to node name
+    if (mp_flags_[node_index] == 0) {
+      char* c_node_name;
+      GetNodeName(&node, &c_node_name);
+      std::string node_name = c_node_name;
+      unsigned char flag = 0;
+      if (node_name.find("cpu") != std::string::npos) {
+        flag |= kMPFlagCpu;
+      } else if (node_name.find("gpu") != std::string::npos) {
+        flag |= kMPFlagGpu;
+      } else if (node_name.find("dsp") != std::string::npos) {
+        flag |= kMPFlagDsp;
+      } else {
+        flag |= kMPFlagCpu;
+      }
+      if (node_name.find("mp_start") != std::string::npos) {
+        flag |= kMPFlagStart;
+      } else if (node_name.find("mp_end") != std::string::npos) {
+        flag |= kMPFlagEnd;
+      } else {
+        flag |= kMPFlagSeq;
+      }
+      delete [] c_node_name;
+      mp_flags_[node_index] = flag;
+    }
 
     for (int i = 0; i < node.inputs->size; ++i) {
       int tensor_index = node.inputs->data[i];
@@ -1216,9 +1280,43 @@ TfLiteStatus Subgraph::Invoke() {
 
     EnsureTensorsVectorCapacity();
     tensor_resized_since_op_invoke_ = false;
-    if (OpInvoke(registration, &node) != kTfLiteOk) {
-      return ReportOpError(&context_, node, registration, node_index,
-                           "failed to invoke");
+    // std::cout << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
+    unsigned char mp_flag = mp_flags_[node_index];
+    if (mp_flag & kMPFlagStart) {
+      if (OpInvoke(registration, &node) != kTfLiteOk) {
+        return ReportOpError(&context_, node, registration, node_index,
+                            "failed to invoke");
+      }
+      state = kMPFlagStart;
+    } else if (mp_flag & kMPFlagEnd) {
+      cpu_future.wait();
+      dsp_future.wait();
+      if (OpInvoke(registration, &node) != kTfLiteOk) {
+        return ReportOpError(&context_, node, registration, node_index,
+                            "failed to invoke");
+      }
+      state = kMPFlagEnd;
+    } else if (mp_flag & kMPFlagSeq) {
+      switch (state) {
+        case kMPFlagStart:
+          if (mp_flag & kMPFlagCpu) {
+            cpu_future = cpu_thread_.push([&registration, context=&context_, node=&node](int){ 
+              registration.invoke(context, node);
+            });
+          } else if (mp_flag & kMPFlagDsp) {
+            dsp_future = dsp_thread_.push([&registration, context=&context_, node=&node](int){ 
+              registration.invoke(context, node);
+            });
+          }
+          break;
+        case kMPFlagSeq:
+        case kMPFlagEnd:
+          if (OpInvoke(registration, &node) != kTfLiteOk) {
+            return ReportOpError(&context_, node, registration, node_index,
+                                "failed to invoke");
+          }
+          break;
+      }
     }
 
     // Force execution prep for downstream ops if the latest op triggered the
@@ -1745,11 +1843,13 @@ TfLiteStatus Subgraph::ModifyGraphWithDelegate(TfLiteDelegate* delegate) {
 
   // STEP 2: Delegate replaces applicable nodes with delegate kernels.
   // =================================================================
+  TF_LITE_KERNEL_LOG(&context_, "STEP 2");
 
   // Setup additional context interface.
   SwitchToDelegateContext();
   TfLiteStatus status = delegate->Prepare(&context_, delegate);
   // Remove additional context info.
+  TF_LITE_KERNEL_LOG(&context_, "AFTER Prepare");
   SwitchToKernelContext();
   TF_LITE_ENSURE_STATUS(reset_delegation_if_not_ok(status));
 

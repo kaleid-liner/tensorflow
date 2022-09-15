@@ -18,6 +18,7 @@ limitations under the License.
 
 #include <cstdint>
 #include <vector>
+#include <iostream>
 
 // Only use multi-threaded Eigen if ruy is disabled.
 #if !defined(TFLITE_WITH_RUY)
@@ -1143,6 +1144,7 @@ TfLiteStatus EvalHybrid(TfLiteContext* context, TfLiteNode* node,
 
 template <KernelType kernel_type, TfLiteType input_type>
 TfLiteStatus EvalImpl(TfLiteContext* context, TfLiteNode* node) {
+  // std::cout << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
   auto* params = reinterpret_cast<TfLiteConvParams*>(node->builtin_data);
   OpData* data = reinterpret_cast<OpData*>(node->user_data);
 
@@ -1169,6 +1171,7 @@ TfLiteStatus EvalImpl(TfLiteContext* context, TfLiteNode* node) {
   }
 
   TFLITE_DCHECK_EQ(input_type, input->type);
+  // std::cout << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
   switch (input_type) {  // Already know in/outtypes are same.
     case kTfLiteFloat32:
       if (filter->type == kTfLiteUInt8 || filter->type == kTfLiteInt8) {
@@ -1210,6 +1213,7 @@ TfLiteStatus EvalImpl(TfLiteContext* context, TfLiteNode* node) {
                          TfLiteTypeGetName(input->type));
       return kTfLiteError;
   }
+  // std::cout << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
   return kTfLiteOk;
 }
 
