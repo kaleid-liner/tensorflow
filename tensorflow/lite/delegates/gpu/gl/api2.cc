@@ -461,6 +461,25 @@ class InferenceRunnerImpl : public InferenceRunner {
     return absl::OkStatus();
   }
 
+  absl::Status RunAsync() override {
+    for (auto& obj : input_tensor_ties_) {
+      RETURN_IF_ERROR(obj->CopyFromExternalObject());
+    }
+    RETURN_IF_ERROR(runtime_->Execute());
+    for (auto& obj : output_tensor_ties_) {
+      RETURN_IF_ERROR(obj->CopyToExternalObject());
+    }
+    RETURN_IF_ERROR(runtime_->command_queue()->Flush());
+    return absl::OkStatus();
+  }
+
+  absl::Status WaitForCompletion() override {
+    if (output_to_cpu_) {
+      RETURN_IF_ERROR(runtime_->command_queue()->WaitForCompletion());
+    }
+    return absl::OkStatus();
+  }
+
  private:
   absl::Status LinkTensors(const std::vector<TensorTieDef>& defs,
                            TensorTieFactory* tie_factory,

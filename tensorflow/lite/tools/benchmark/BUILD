@@ -28,6 +28,25 @@ cc_library(
 )
 
 cc_binary(
+    name = "profile_energy",
+    srcs = ["profile_energy.cc"],
+    tags = ["builder_default_android_arm64"],
+    linkopts = tflite_linkopts() + select({
+        "//tensorflow:android": [
+            "-pie",  # Android 5.0 and later supports only PIE
+            "-lm",  # some builtin ops, e.g., tanh, need -lm
+            "-Wl,--rpath=/data/local/tmp/",  # Hexagon delegate libraries should be in /data/local/tmp
+        ],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":benchmark_tflite_model_lib",
+        "//tensorflow/lite:energy_profiler",
+    ],
+    copts = common_copts,
+)
+
+cc_binary(
     name = "benchmark_model",
     copts = common_copts,
     linkopts = tflite_linkopts() + select({

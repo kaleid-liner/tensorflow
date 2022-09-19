@@ -246,6 +246,35 @@ class DelegateKernel {
     return absl::OkStatus();
   }
 
+  absl::Status InvokeAsync(TfLiteContext* context) {
+    if (thread_id_prepare_ != std::this_thread::get_id()) {
+      TFLITE_LOG(tflite::TFLITE_LOG_WARNING,
+                 "GpuDelegate invoke thread != prepare thread");
+      if (enforce_same_thread_) {
+        return absl::FailedPreconditionError(
+            "GpuDelegate must run on the same thread where it was "
+            "initialized.");
+      }
+    }
+
+    const bool is_dequant_required = !quant_conversion_map_.empty();
+    if (is_dequant_required) {
+      RETURN_IF_ERROR(
+          DequantizeInputs(context, input_indices_, quant_conversion_map_));
+    }
+    RETURN_IF_ERROR(SetInputsAndOutputs(context));
+    RETURN_IF_ERROR(runner_->RunAsync());
+    // if (is_dequant_required) {
+    //   RETURN_IF_ERROR(
+    //       QuantizeOutputs(context, output_indices_, quant_conversion_map_));
+    // }
+    return absl::OkStatus();
+  }
+
+  absl::Status WaitForCompletion(TfLiteContext* context) {
+    return runner_->WaitForCompletion();
+  }
+
  private:
   absl::Status SetInputsAndOutputs(TfLiteContext* context) {
     for (int i = 0; i < input_indices_.size(); ++i) {
@@ -560,6 +589,26 @@ TfLiteStatus DelegatePrepare(TfLiteContext* context, TfLiteDelegate* delegate) {
       0,                      // .builtin_code
       "TfLiteGpuDelegateV2",  // .custom_name
       1,                      // .version
+      // .invoke_async
+      [](TfLiteContext* context, TfLiteNode* node) -> TfLiteStatus {
+        const auto status = GetDelegateKernel(node)->InvokeAsync(context);
+        if (!status.ok()) {
+          TF_LITE_KERNEL_LOG(context, "TfLiteGpuDelegate Invoke: %s",
+                             std::string(status.message()).c_str());
+          return kTfLiteError;
+        }
+        return kTfLiteOk;
+      },
+      // .wait_for_completion
+      [](TfLiteContext* context, TfLiteNode* node) -> TfLiteStatus {
+        const auto status = GetDelegateKernel(node)->WaitForCompletion(context);
+        if (!status.ok()) {
+          TF_LITE_KERNEL_LOG(context, "TfLiteGpuDelegate Invoke: %s",
+                             std::string(status.message()).c_str());
+          return kTfLiteError;
+        }
+        return kTfLiteOk;
+      },
   };
 
   auto* gpu_delegate = GetDelegate(delegate);

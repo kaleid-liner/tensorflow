@@ -229,6 +229,15 @@ class Delegate {
     return runner_->Run();
   }
 
+  absl::Status InvokeAsync(TfLiteContext* context) {
+    RETURN_IF_ERROR(SetInputsAndOutputs(context));
+    return runner_->RunAsync();
+  }
+
+  absl::Status WaitForCompletion(TfLiteContext* context) {
+    return runner_->WaitForCompletion()
+  }
+
   void BindGlBufferToTensor(GLuint buffer_id, int tensor_index,
                             DataType data_type, DataLayout data_layout) {
     // At this point the delegate haven't seen a model yet. Therefore, just
@@ -354,6 +363,26 @@ TfLiteStatus DelegatePrepare(TfLiteContext* context, TfLiteDelegate* delegate) {
       0,                        // .builtin_code
       "TfLiteGpuDelegate_New",  // .custom_name
       1,                        // .version
+      // .invoke_async
+      [](TfLiteContext* context, TfLiteNode* node) -> TfLiteStatus {
+        const auto status = GetDelegate(node)->InvokeAsync(context);
+        if (!status.ok()) {
+          TF_LITE_KERNEL_LOG(context, "TfLiteGpuDelegate Invoke: %s",
+                             std::string(status.message()).c_str());
+          return kTfLiteError;
+        }
+        return kTfLiteOk;
+      },
+      // .wait_for_completion
+      [](TfLiteContext* context, TfLiteNode* node) -> TfLiteStatus {
+        const auto status = GetDelegate(node)->WaitForCompletion(context);
+        if (!status.ok()) {
+          TF_LITE_KERNEL_LOG(context, "TfLiteGpuDelegate Invoke: %s",
+                             std::string(status.message()).c_str());
+          return kTfLiteError;
+        }
+        return kTfLiteOk;
+      },
   };
   TfLiteIntArray* ops_to_replace = GetOpsToReplace(context);
   const auto status = context->ReplaceNodeSubsetsWithDelegateKernels(

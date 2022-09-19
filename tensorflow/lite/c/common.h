@@ -907,6 +907,10 @@ typedef struct TfLiteRegistration {
   // Note: It is the responsibility of the registration binder to set this
   // properly.
   int version;
+
+  TfLiteStatus (*invoke_async)(TfLiteContext* context, TfLiteNode* node);
+
+  TfLiteStatus (*wait_for_completion)(TfLiteContext* context, TfLiteNode* node);
 } TfLiteRegistration;
 
 // The flags used in `TfLiteDelegate`. Note that this is a bitmask, so the

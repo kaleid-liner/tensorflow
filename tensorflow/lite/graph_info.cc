@@ -39,8 +39,11 @@ class PartitionGraphIntoIndependentNodeSubsetsImpl {
  public:
   PartitionGraphIntoIndependentNodeSubsetsImpl(
       const GraphInfo* info, const TfLiteIntArray* nodes_to_partition,
+      std::vector<int>* mp_start_nodes, std::vector<int>* mp_end_nodes,
       std::vector<NodeSubset>* node_subsets)
       : info_(info),
+        mp_start_nodes_(mp_start_nodes),
+        mp_end_nodes_(mp_end_nodes),
         node_subsets_(node_subsets),
         node_type_(info_->num_total_nodes(), NodeSubset::kTfNonPartition) {
     // Populate the node_type_ map.
@@ -209,8 +212,17 @@ class PartitionGraphIntoIndependentNodeSubsetsImpl {
       bool did_something = false;
       for (int node_index = 0; node_index < info_->num_execution_nodes();
            node_index++) {
+        // Check if mp_end node
+        auto iter = std::find(mp_end_nodes_->begin(), mp_end_nodes_->end(), node_index);
+        if (iter != mp_end_nodes_->end()) {
+          mp_end_nodes_->erase(iter);
+          return;
+        }
         if (UpdateNode(node_index)) {
           did_something = true;
+          if (std::find(mp_start_nodes_->begin(), mp_start_nodes_->end(), node_index) != mp_start_nodes_->end()) {
+            return;
+          }
         }
       }
       if (!did_something) return;
@@ -236,6 +248,10 @@ class PartitionGraphIntoIndependentNodeSubsetsImpl {
   // TODO(b/149099381): This should be a list, but we are now chaining
   // dependency between previous ops.
   std::vector<int> control_deps_;
+  // Must end the current subset after encountering these nodes.
+  std::vector<int>* mp_start_nodes_;
+  // Must start a new node subset for these nodes.
+  std::vector<int>* mp_end_nodes_;
 };
 // LINT.ThenChange(//tensorflow/lite/delegates/utils.h)
 
@@ -243,8 +259,10 @@ class PartitionGraphIntoIndependentNodeSubsetsImpl {
 
 TfLiteStatus PartitionGraphIntoIndependentNodeSubsets(
     const GraphInfo* info, const TfLiteIntArray* nodes_to_partition,
+    std::vector<int>* mp_start_nodes, std::vector<int>* mp_end_nodes,
     std::vector<NodeSubset>* node_subsets) {
   PartitionGraphIntoIndependentNodeSubsetsImpl(info, nodes_to_partition,
+                                               mp_start_nodes, mp_end_nodes,
                                                node_subsets)
       .Partition();
   // author:fu

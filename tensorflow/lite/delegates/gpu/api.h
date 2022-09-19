@@ -313,6 +313,9 @@ class InferenceRunner {
   virtual absl::Status SetOutputObject(int index, TensorObject object) = 0;
 
   virtual absl::Status Run() = 0;
+  virtual absl::Status RunAsync() = 0;
+
+  virtual absl::Status WaitForCompletion() = 0;
 };
 
 // Encapsulated compilation/runtime tradeoffs.

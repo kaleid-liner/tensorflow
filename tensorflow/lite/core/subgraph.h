@@ -37,6 +37,7 @@ limitations under the License.
 #include "tensorflow/lite/memory_planner.h"
 #include "tensorflow/lite/util.h"
 #include "tensorflow/lite/ctpl_stl.h"
+#include "tensorflow/lite/energy_profiler.h"
 
 namespace tflite {
 
@@ -775,9 +776,15 @@ class Subgraph {
     kMPFlagEnd   = 0x10,
     kMPFlagSeq   = 0x20
   };
-  std::vector<unsigned char> mp_flags_;
+  std::map<int, unsigned char> mp_flags_;
+
+  bool enable_cpu_, enable_gpu_, enable_dsp_;
 
   ctpl::thread_pool dsp_thread_;
+
+  jianyu::EnergyProfiler energy_profiler_;
+
+  std::chrono::microseconds wait_us_;
 
   // The error reporter delegate that tflite will forward queries errors to.
   ErrorReporter* error_reporter_;

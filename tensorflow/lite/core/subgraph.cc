@@ -242,7 +242,11 @@ Subgraph::Subgraph(ErrorReporter* error_reporter,
       resources_(resources),
       resource_ids_(resource_ids),
       initialization_status_map_(initialization_status_map),
-      dsp_thread_(1, 4) {
+      dsp_thread_(1, 6),
+      enable_cpu_(false),
+      enable_dsp_(false),
+      enable_gpu_(false),
+      energy_profiler_(100) {
   context_.impl_ = static_cast<void*>(this);
   context_.ResizeTensor = ResizeTensor;
   context_.ReportError = ReportErrorC;
@@ -263,7 +267,7 @@ Subgraph::Subgraph(ErrorReporter* error_reporter,
   tensors_.reserve(kTensorsReservedCapacity);
   nodes_and_registration_.reserve(kTensorsReservedCapacity);
   // jianyu: set dispatch thread affinity
-  // sxr::setCurrentThreadAffinityMask(7);
+  sxr::setCurrentThreadAffinityMask(7);
   // Invalid to call these except from TfLiteDelegate
   SwitchToKernelContext();
 }
@@ -415,7 +419,24 @@ TfLiteStatus Subgraph::ReplaceNodeSubsetsWithDelegateKernels(
   // fully not-this-delegate or this-delegate computation.
   InterpreterInfo info(this);
   std::vector<NodeSubset> node_subsets;
+
+  std::vector<int> mp_start_nodes;
+  std::vector<int> mp_end_nodes;
+  for (auto node_index : TfLiteIntArrayView(nodes_to_replace)) {
+    const TfLiteNode& node = info.node(node_index);
+    char* c_node_name;
+    GetNodeName(&node, &c_node_name);
+    std::string node_name = c_node_name;
+    if (node_name.find("mp_start") != std::string::npos) {
+      mp_start_nodes.push_back(node_index);
+    }
+    if (node_name.find("mp_end") != std::string::npos) {
+      mp_end_nodes.push_back(node_index);
+    }
+  }
+
   PartitionGraphIntoIndependentNodeSubsets(&info, nodes_to_replace,
+                                           &mp_start_nodes, &mp_end_nodes,
                                            &node_subsets);
 
 #ifdef __ANDROID__
@@ -601,7 +622,24 @@ TfLiteStatus Subgraph::PreviewDelegatePartitioning(
   // Partition the execution plan into node subsets.
   InterpreterInfo info(this);
   std::vector<NodeSubset> node_subsets;
+
+  std::vector<int> mp_start_nodes;
+  std::vector<int> mp_end_nodes;
+  for (auto node_index : TfLiteIntArrayView(nodes_to_replace)) {
+    const TfLiteNode& node = info.node(node_index);
+    char* c_node_name;
+    GetNodeName(&node, &c_node_name);
+    std::string node_name = c_node_name;
+    if (node_name.find("mp_start") != std::string::npos) {
+      mp_start_nodes.push_back(node_index);
+    }
+    if (node_name.find("mp_end") != std::string::npos) {
+      mp_end_nodes.push_back(node_index);
+    }
+  }
+
   PartitionGraphIntoIndependentNodeSubsets(&info, nodes_to_replace,
+                                           &mp_start_nodes, &mp_end_nodes,
                                            &node_subsets);
 
   // Create one TfLiteDelegateParams per node-subset which would be delegated.
@@ -667,7 +705,6 @@ bool Subgraph::IsCancelled() {
 
 void Subgraph::ReserveNodes(int count) {
   nodes_and_registration_.reserve(count);
-  mp_flags_.reserve(count);
 }
 
 TfLiteStatus Subgraph::CheckTensorIndices(const char* label, const int* indices,
@@ -1186,12 +1223,25 @@ TfLiteStatus Subgraph::Invoke() {
     ReportError("Non-persistent memory is not available.");
     return kTfLiteError;
   }
+  std::cout << energy_profiler_.GetAvgPower() << std::endl;
+  std::cout << energy_profiler_.GetMovingPower() << std::endl;
+  std::cout << wait_us_.count() << std::endl;
+  energy_profiler_.Resume();
   TFLITE_SCOPED_TAGGED_DEFAULT_PROFILE(profiler_.get(), "Invoke");
 
   // jianyu: Starting working threads for CPU and DSP
-  mp_flags_.resize(execution_plan_.size(), 0);
   std::future<void> dsp_future;
   unsigned char state = kMPFlagSeq;
+  std::vector<int> cpu_executing;
+  const TfLiteRegistration* gpu_registration = nullptr;
+  TfLiteNode* gpu_node;
+
+  // jianyu: not first invoked
+  if (enable_cpu_ || enable_gpu_ || enable_dsp_) {
+    if (!enable_dsp_) {
+      dsp_thread_.stop();
+    }
+  }
 
   // Invocations are always done in node order.
   // Note that calling Invoke repeatedly will cause the original memory plan to
@@ -1214,29 +1264,36 @@ TfLiteStatus Subgraph::Invoke() {
     TFLITE_SCOPED_TAGGED_OPERATOR_PROFILE(profiler_.get(), op_name, node_index);
 
     // jianyu: assign device and plan execution according to node name
-    if (mp_flags_[node_index] == 0) {
+    if (mp_flags_.find(node_index) == mp_flags_.end()) {
+      std::cout << node_index << std::endl;
       char* c_node_name;
       GetNodeName(&node, &c_node_name);
       std::string node_name = c_node_name;
       unsigned char flag = 0;
-      if (node_name.find("cpu") != std::string::npos) {
-        flag |= kMPFlagCpu;
-      } else if (node_name.find("gpu") != std::string::npos) {
+      if ((node_name.find("gpu") != std::string::npos)
+//     || (node_name.find("StatefulPartitionedCall") != std::string::npos)
+      ) {
         flag |= kMPFlagGpu;
+        enable_gpu_ = true;
       } else if (node_name.find("dsp") != std::string::npos) {
         flag |= kMPFlagDsp;
+        enable_dsp_ = true;
       } else {
         flag |= kMPFlagCpu;
+        enable_cpu_ = true;
       }
       if (node_name.find("mp_start") != std::string::npos) {
         flag |= kMPFlagStart;
-      } else if (node_name.find("mp_end") != std::string::npos) {
+      }
+      if (node_name.find("mp_end") != std::string::npos) {
         flag |= kMPFlagEnd;
-      } else {
+      }
+      if (!(flag & kMPFlagStart) && !(flag & kMPFlagEnd)) {
         flag |= kMPFlagSeq;
       }
       delete [] c_node_name;
       mp_flags_[node_index] = flag;
+      std::cout << node_name << ": " << (int)flag << std::endl;
     }
 
     for (int i = 0; i < node.inputs->size; ++i) {
@@ -1281,31 +1338,45 @@ TfLiteStatus Subgraph::Invoke() {
     tensor_resized_since_op_invoke_ = false;
     // std::cout << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
     unsigned char mp_flag = mp_flags_[node_index];
-    if (mp_flag & kMPFlagStart) {
-      if (OpInvoke(registration, &node) != kTfLiteOk) {
-        return ReportOpError(&context_, node, registration, node_index,
-                            "failed to invoke");
+    if (mp_flag & kMPFlagEnd) {
+      for (int cpu_node_index: cpu_executing) {
+        TfLiteNode& cpu_node = nodes_and_registration_[cpu_node_index].first;
+        const TfLiteRegistration& cpu_registration = 
+          nodes_and_registration_[cpu_node_index].second;
+        if (OpInvoke(cpu_registration, &cpu_node) != kTfLiteOk) {
+          return ReportOpError(&context_, cpu_node, cpu_registration, cpu_node_index,
+                              "failed to invoke");
+        }
       }
-      state = kMPFlagStart;
-    } else if (mp_flag & kMPFlagEnd) {
-      dsp_future.wait();
-      if (OpInvoke(registration, &node) != kTfLiteOk) {
-        return ReportOpError(&context_, node, registration, node_index,
-                            "failed to invoke");
+      cpu_executing.clear();
+      auto t0 = std::chrono::high_resolution_clock::now();
+      if (enable_dsp_ && dsp_future.valid()) {
+        dsp_future.wait();
       }
+      if (enable_gpu_ && (gpu_registration != nullptr)) {
+        gpu_registration->wait_for_completion(&context_, gpu_node);
+        gpu_registration = nullptr;
+      }
+      auto t1 = std::chrono::high_resolution_clock::now();
+      wait_us_ = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0);
       state = kMPFlagEnd;
-    } else if (mp_flag & kMPFlagSeq) {
+    }
+    if (mp_flag & kMPFlagStart) {
+      state = kMPFlagStart;
+    }
+    if (mp_flag & kMPFlagSeq) {
       switch (state) {
         case kMPFlagStart:
           if (mp_flag & kMPFlagCpu) {
-            if (OpInvoke(registration, &node) != kTfLiteOk) {
-              return ReportOpError(&context_, node, registration, node_index,
-                                  "failed to invoke");
-            }
+            cpu_executing.push_back(node_index);
           } else if (mp_flag & kMPFlagDsp) {
             dsp_future = dsp_thread_.push([&registration, context=&context_, node=&node](int){ 
               registration.invoke(context, node);
             });
+          } else if (mp_flag & kMPFlagGpu) {
+            gpu_registration = &registration;
+            gpu_node = &node;
+            registration.invoke_async(&context_, &node);
           }
           break;
         case kMPFlagSeq:
@@ -1315,6 +1386,11 @@ TfLiteStatus Subgraph::Invoke() {
                                 "failed to invoke");
           }
           break;
+      }
+    } else {
+      if (OpInvoke(registration, &node) != kTfLiteOk) {
+        return ReportOpError(&context_, node, registration, node_index,
+                            "failed to invoke");
       }
     }
 
@@ -1340,6 +1416,16 @@ TfLiteStatus Subgraph::Invoke() {
     // Release dynamic tensor memory if configured by the user.
     MaybeReleaseDynamicInputs(node, node_index);
   }
+
+  if (enable_dsp_ && dsp_future.valid()) {
+    dsp_future.wait();
+  }
+  if (enable_gpu_ && (gpu_registration != nullptr)) {
+    gpu_registration->wait_for_completion(&context_, gpu_node);
+    gpu_registration = nullptr;
+  }
+
+  energy_profiler_.Pause();
 
   return status;
 }

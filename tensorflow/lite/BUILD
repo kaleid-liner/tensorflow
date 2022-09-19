@@ -473,6 +473,15 @@ cc_library(
     deps = [":sxr_thread"],
 )
 
+cc_library(
+    name = "energy_profiler",
+    hdrs = ["energy_profiler.h"],
+    srcs = ["energy_profiler.cc"],
+    compatible_with = get_compatible_with_portable(),
+    deps = [":ctpl_stl"],
+    copts = tflite_copts(),
+)
+
 # The key parts of the C++ API, excluding experimental APIs.
 # This target defines the TF Lite classes for loading models and interpreting them.
 #
@@ -520,6 +529,7 @@ cc_library(
         ":version",
         ":ctpl_stl",
         ":sxr_thread",
+        ":energy_profiler",
         "//tensorflow/lite/c:c_api_types",
         "//tensorflow/lite/c:common",
         "//tensorflow/lite/core/api",
