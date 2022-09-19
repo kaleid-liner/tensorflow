@@ -266,13 +266,13 @@ TfLiteStatus PartitionGraphIntoIndependentNodeSubsets(
                                                node_subsets)
       .Partition();
   // author:fu
-  std::cout << "node_subsets info: " << std::endl;
-  for(int i = 0; i < node_subsets->size(); ++i){
-    for(int j = 0; j < (*node_subsets)[i].nodes.size(); ++j){
-      std::cout << (*node_subsets)[i].nodes[j] << " " << std::endl;
-    }
-    std::cout << std::endl;
-  }
+  // std::cout << "node_subsets info: " << std::endl;
+  // for(int i = 0; i < node_subsets->size(); ++i){
+  //   for(int j = 0; j < (*node_subsets)[i].nodes.size(); ++j){
+  //     std::cout << (*node_subsets)[i].nodes[j] << " " << std::endl;
+  //   }
+  //   std::cout << std::endl;
+  // }
   return kTfLiteOk;
 }
 

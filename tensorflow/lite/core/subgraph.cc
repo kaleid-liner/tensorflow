@@ -243,10 +243,10 @@ Subgraph::Subgraph(ErrorReporter* error_reporter,
       resource_ids_(resource_ids),
       initialization_status_map_(initialization_status_map),
       dsp_thread_(1, 6),
+      energy_profiler_(100),
       enable_cpu_(false),
       enable_dsp_(false),
-      enable_gpu_(false),
-      energy_profiler_(100) {
+      enable_gpu_(false) {
   context_.impl_ = static_cast<void*>(this);
   context_.ResizeTensor = ResizeTensor;
   context_.ReportError = ReportErrorC;
@@ -1225,7 +1225,7 @@ TfLiteStatus Subgraph::Invoke() {
   }
   std::cout << energy_profiler_.GetAvgPower() << std::endl;
   std::cout << energy_profiler_.GetMovingPower() << std::endl;
-  std::cout << wait_us_.count() << std::endl;
+  // std::cout << wait_us_.count() << std::endl;
   energy_profiler_.Resume();
   TFLITE_SCOPED_TAGGED_DEFAULT_PROFILE(profiler_.get(), "Invoke");
 
@@ -1265,7 +1265,7 @@ TfLiteStatus Subgraph::Invoke() {
 
     // jianyu: assign device and plan execution according to node name
     if (mp_flags_.find(node_index) == mp_flags_.end()) {
-      std::cout << node_index << std::endl;
+      // std::cout << node_index << std::endl;
       char* c_node_name;
       GetNodeName(&node, &c_node_name);
       std::string node_name = c_node_name;
@@ -1293,7 +1293,7 @@ TfLiteStatus Subgraph::Invoke() {
       }
       delete [] c_node_name;
       mp_flags_[node_index] = flag;
-      std::cout << node_name << ": " << (int)flag << std::endl;
+      // std::cout << node_name << ": " << (int)flag << std::endl;
     }
 
     for (int i = 0; i < node.inputs->size; ++i) {
@@ -1349,7 +1349,7 @@ TfLiteStatus Subgraph::Invoke() {
         }
       }
       cpu_executing.clear();
-      auto t0 = std::chrono::high_resolution_clock::now();
+      // auto t0 = std::chrono::high_resolution_clock::now();
       if (enable_dsp_ && dsp_future.valid()) {
         dsp_future.wait();
       }
@@ -1357,8 +1357,8 @@ TfLiteStatus Subgraph::Invoke() {
         gpu_registration->wait_for_completion(&context_, gpu_node);
         gpu_registration = nullptr;
       }
-      auto t1 = std::chrono::high_resolution_clock::now();
-      wait_us_ = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0);
+      // auto t1 = std::chrono::high_resolution_clock::now();
+      // wait_us_ = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0);
       state = kMPFlagEnd;
     }
     if (mp_flag & kMPFlagStart) {

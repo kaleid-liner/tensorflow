@@ -556,18 +556,18 @@ class InferenceRunnerImpl : public CLInferenceRunner {
       RETURN_IF_ERROR(gl_interop_fabric_->Start());
     }
 #endif
-    for (const auto& input : inputs_) {
-      RETURN_IF_ERROR(input->CopyFromExternalObject());
-    }
+    // for (const auto& input : inputs_) {
+    //   RETURN_IF_ERROR(input->CopyFromExternalObject());
+    // }
 
     RETURN_IF_ERROR(RunWithoutExternalBufferCopy());
 
-    for (const auto& output : outputs_) {
-      RETURN_IF_ERROR(output->CopyToExternalObject());
-      if (output->def().external_def.object_def.object_type ==
-          ObjectType::CPU_MEMORY) {
-      }
-    }
+    // for (const auto& output : outputs_) {
+    //   RETURN_IF_ERROR(output->CopyToExternalObject());
+    //   if (output->def().external_def.object_def.object_type ==
+    //       ObjectType::CPU_MEMORY) {
+    //   }
+    // }
 
     return absl::OkStatus();
   }

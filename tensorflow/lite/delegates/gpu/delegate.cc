@@ -593,7 +593,7 @@ TfLiteStatus DelegatePrepare(TfLiteContext* context, TfLiteDelegate* delegate) {
       [](TfLiteContext* context, TfLiteNode* node) -> TfLiteStatus {
         const auto status = GetDelegateKernel(node)->InvokeAsync(context);
         if (!status.ok()) {
-          TF_LITE_KERNEL_LOG(context, "TfLiteGpuDelegate Invoke: %s",
+          TF_LITE_KERNEL_LOG(context, "TfLiteGpuDelegate InvokeAsync: %s",
                              std::string(status.message()).c_str());
           return kTfLiteError;
         }
@@ -603,7 +603,7 @@ TfLiteStatus DelegatePrepare(TfLiteContext* context, TfLiteDelegate* delegate) {
       [](TfLiteContext* context, TfLiteNode* node) -> TfLiteStatus {
         const auto status = GetDelegateKernel(node)->WaitForCompletion(context);
         if (!status.ok()) {
-          TF_LITE_KERNEL_LOG(context, "TfLiteGpuDelegate Invoke: %s",
+          TF_LITE_KERNEL_LOG(context, "TfLiteGpuDelegate WaitForCompletion: %s",
                              std::string(status.message()).c_str());
           return kTfLiteError;
         }
