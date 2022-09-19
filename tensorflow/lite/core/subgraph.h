@@ -780,7 +780,7 @@ class Subgraph {
 
   bool enable_cpu_, enable_gpu_, enable_dsp_;
 
-  ctpl::thread_pool dsp_thread_;
+  ctpl::thread_pool dsp_thread_, cpu_thread_;
 
   jianyu::EnergyProfiler energy_profiler_;
 

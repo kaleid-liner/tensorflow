@@ -243,6 +243,7 @@ Subgraph::Subgraph(ErrorReporter* error_reporter,
       resource_ids_(resource_ids),
       initialization_status_map_(initialization_status_map),
       dsp_thread_(1, 6),
+      cpu_thread_(1, 6),
       enable_cpu_(false),
       enable_dsp_(false),
       enable_gpu_(false),
@@ -1230,9 +1231,8 @@ TfLiteStatus Subgraph::Invoke() {
   TFLITE_SCOPED_TAGGED_DEFAULT_PROFILE(profiler_.get(), "Invoke");
 
   // jianyu: Starting working threads for CPU and DSP
-  std::future<void> dsp_future;
+  std::future<void> dsp_future, cpu_future;
   unsigned char state = kMPFlagSeq;
-  std::vector<int> cpu_executing;
   const TfLiteRegistration* gpu_registration = nullptr;
   TfLiteNode* gpu_node;
 
@@ -1339,20 +1339,13 @@ TfLiteStatus Subgraph::Invoke() {
     // std::cout << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
     unsigned char mp_flag = mp_flags_[node_index];
     if (mp_flag & kMPFlagEnd) {
-      for (int cpu_node_index: cpu_executing) {
-        TfLiteNode& cpu_node = nodes_and_registration_[cpu_node_index].first;
-        const TfLiteRegistration& cpu_registration = 
-          nodes_and_registration_[cpu_node_index].second;
-        if (OpInvoke(cpu_registration, &cpu_node) != kTfLiteOk) {
-          return ReportOpError(&context_, cpu_node, cpu_registration, cpu_node_index,
-                              "failed to invoke");
-        }
-      }
-      cpu_executing.clear();
-      auto t0 = std::chrono::high_resolution_clock::now();
       if (enable_dsp_ && dsp_future.valid()) {
         dsp_future.wait();
       }
+      if (enable_cpu_ && cpu_future.valid()) {
+        cpu_future.wait();
+      }
+      auto t0 = std::chrono::high_resolution_clock::now();
       if (enable_gpu_ && (gpu_registration != nullptr)) {
         gpu_registration->wait_for_completion(&context_, gpu_node);
         gpu_registration = nullptr;
@@ -1368,7 +1361,9 @@ TfLiteStatus Subgraph::Invoke() {
       switch (state) {
         case kMPFlagStart:
           if (mp_flag & kMPFlagCpu) {
-            cpu_executing.push_back(node_index);
+            cpu_future = cpu_thread_.push([&registration, context=&context_, node=&node](int){ 
+              registration.invoke(context, node);
+            });
           } else if (mp_flag & kMPFlagDsp) {
             dsp_future = dsp_thread_.push([&registration, context=&context_, node=&node](int){ 
               registration.invoke(context, node);
@@ -1419,6 +1414,9 @@ TfLiteStatus Subgraph::Invoke() {
 
   if (enable_dsp_ && dsp_future.valid()) {
     dsp_future.wait();
+  }
+  if (enable_cpu_ && cpu_future.valid()) {
+    cpu_future.wait();
   }
   if (enable_gpu_ && (gpu_registration != nullptr)) {
     gpu_registration->wait_for_completion(&context_, gpu_node);
