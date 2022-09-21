@@ -134,6 +134,38 @@ class PartitionGraphIntoIndependentNodeSubsetsImpl {
     kEpochAlwaysReady = -2
   };
 
+  bool CanUpdate(int node_index) {
+    const TfLiteNode& node = info_->node(node_index);
+    NodeSubset& current_subset = node_subsets_->back();
+    int current_epoch = node_subsets_->size() - 1;
+    // Check if node is already done.
+    if (node_epochs_[node_index] != kEpochNotReady) {
+      return false;
+    }
+    // See if all dependencies of this node are already assigned to a
+    // node sub set.
+    for (int input_tensor_index : TfLiteIntArrayView(node.inputs)) {
+      if (input_tensor_index != kTfLiteOptionalTensor &&
+          tensor_epochs_[input_tensor_index] == kEpochNotReady) {
+        return false;
+      }
+    }
+    // If any of the nodes that current node depend on is not assigned
+    // any epochs then don't process this node.
+    if (control_deps_[node_index] != -1 &&
+        node_epochs_[control_deps_[node_index]] == kEpochNotReady) {
+      return false;
+    }
+
+    int original_node_idx = info_->node_index(node_index);
+    if ((current_subset.type != NodeSubset::kTfUnexplored
+      && current_subset.type != node_type_[original_node_idx])) {
+      return false;
+    }
+
+    return true;
+  }
+
   // Updates the node at `node_index` in the execution plan and returns true if
   // it is assigned to an epoch. False is returned if the node is already set to
   // an epoch, its inputs are not all assigned to epochs, or if it cannot be
@@ -213,14 +245,15 @@ class PartitionGraphIntoIndependentNodeSubsetsImpl {
       for (int node_index = 0; node_index < info_->num_execution_nodes();
            node_index++) {
         // Check if mp_end node
-        auto iter = std::find(mp_end_nodes_->begin(), mp_end_nodes_->end(), node_index);
-        if (iter != mp_end_nodes_->end()) {
+        int original_node_index = info_->node_index(node_index);
+        auto iter = std::find(mp_end_nodes_->begin(), mp_end_nodes_->end(), original_node_index);
+        if (CanUpdate(node_index) && iter != mp_end_nodes_->end()) {
           mp_end_nodes_->erase(iter);
           return;
         }
         if (UpdateNode(node_index)) {
           did_something = true;
-          if (std::find(mp_start_nodes_->begin(), mp_start_nodes_->end(), node_index) != mp_start_nodes_->end()) {
+          if (std::find(mp_start_nodes_->begin(), mp_start_nodes_->end(), original_node_index) != mp_start_nodes_->end()) {
             return;
           }
         }

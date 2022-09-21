@@ -2672,7 +2672,11 @@ TfLiteIntArray* GetOpsToReplace(
     // jianyu: Check assignment
     char* node_name;
     context->GetNodeName(context, node, &node_name);
-    bool gpu_assigned = (strstr(node_name, "gpu") != nullptr);
+    bool gpu_assigned = ((strstr(node_name, "gpu") != nullptr) 
+#ifdef GPU_HEAD
+                      || (strstr(node_name, "StatefulPartitionedCall") != nullptr)
+#endif
+    );
     delete [] node_name;
     if (!gpu_assigned) {
       return false;

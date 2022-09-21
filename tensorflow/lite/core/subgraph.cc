@@ -1271,7 +1271,9 @@ TfLiteStatus Subgraph::Invoke() {
       std::string node_name = c_node_name;
       unsigned char flag = 0;
       if ((node_name.find("gpu") != std::string::npos)
-//     || (node_name.find("StatefulPartitionedCall") != std::string::npos)
+#ifdef GPU_HEAD
+       || (node_name.find("StatefulPartitionedCall") != std::string::npos)
+#endif
       ) {
         flag |= kMPFlagGpu;
         enable_gpu_ = true;
@@ -1415,14 +1417,6 @@ TfLiteStatus Subgraph::Invoke() {
     }
     // Release dynamic tensor memory if configured by the user.
     MaybeReleaseDynamicInputs(node, node_index);
-  }
-
-  if (enable_dsp_ && dsp_future.valid()) {
-    dsp_future.wait();
-  }
-  if (enable_gpu_ && (gpu_registration != nullptr)) {
-    gpu_registration->wait_for_completion(&context_, gpu_node);
-    gpu_registration = nullptr;
   }
 
   energy_profiler_.Pause();
