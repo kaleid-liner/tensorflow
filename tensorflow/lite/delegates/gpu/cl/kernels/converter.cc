@@ -495,35 +495,36 @@ class CpuCopier : public OpenClConverterImpl {
 
   absl::Status Convert(const TensorObject& input_obj,
                        const TensorObject& output_obj) override {
-    auto cpu_input = absl::get_if<CpuMemory>(&input_obj);
-    auto cpu_output = absl::get_if<CpuMemory>(&output_obj);
-    if (cpu_input) {
-      auto texture_output = absl::get_if<OpenClTexture>(&output_obj);
-      if (texture_output) {
-        return queue_->EnqueueWriteImage(
-            texture_output->memobj, int3(region_[0], region_[1], region_[2]),
-            cpu_input->data, async_);
-      }
-      auto buffer_output = absl::get_if<OpenClBuffer>(&output_obj);
-      if (buffer_output) {
-        return queue_->EnqueueWriteBuffer(buffer_output->memobj,
-                                          cpu_input->size_bytes,
-                                          cpu_input->data, async_);
-      }
-    } else if (cpu_output) {
-      auto texture_input = absl::get_if<OpenClTexture>(&input_obj);
-      if (texture_input) {
-        return queue_->EnqueueReadImage(
-            texture_input->memobj, int3(region_[0], region_[1], region_[2]),
-            cpu_output->data, async_);
-      }
-      auto buffer_input = absl::get_if<OpenClBuffer>(&input_obj);
-      if (buffer_input) {
-        return queue_->EnqueueReadBuffer(buffer_input->memobj,
-                                         cpu_output->size_bytes,
-                                         cpu_output->data, async_);
-      }
-    }
+    return absl::OkStatus();
+    // auto cpu_input = absl::get_if<CpuMemory>(&input_obj);
+    // auto cpu_output = absl::get_if<CpuMemory>(&output_obj);
+    // if (cpu_input) {
+    //   auto texture_output = absl::get_if<OpenClTexture>(&output_obj);
+    //   if (texture_output) {
+    //     return queue_->EnqueueWriteImage(
+    //         texture_output->memobj, int3(region_[0], region_[1], region_[2]),
+    //         cpu_input->data, async_);
+    //   }
+    //   auto buffer_output = absl::get_if<OpenClBuffer>(&output_obj);
+    //   if (buffer_output) {
+    //     return queue_->EnqueueWriteBuffer(buffer_output->memobj,
+    //                                       cpu_input->size_bytes,
+    //                                       cpu_input->data, async_);
+    //   }
+    // } else if (cpu_output) {
+    //   auto texture_input = absl::get_if<OpenClTexture>(&input_obj);
+    //   if (texture_input) {
+    //     return queue_->EnqueueReadImage(
+    //         texture_input->memobj, int3(region_[0], region_[1], region_[2]),
+    //         cpu_output->data, async_);
+    //   }
+    //   auto buffer_input = absl::get_if<OpenClBuffer>(&input_obj);
+    //   if (buffer_input) {
+    //     return queue_->EnqueueReadBuffer(buffer_input->memobj,
+    //                                      cpu_output->size_bytes,
+    //                                      cpu_output->data, async_);
+    //   }
+    // }
     return absl::InternalError("Unexpected object");
   }
 
