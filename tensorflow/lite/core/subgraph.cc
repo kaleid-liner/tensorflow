@@ -242,7 +242,7 @@ Subgraph::Subgraph(ErrorReporter* error_reporter,
       resources_(resources),
       resource_ids_(resource_ids),
       initialization_status_map_(initialization_status_map),
-      dsp_thread_(1, 6),
+      dsp_thread_(1, 3),
       energy_profiler_(100),
       enable_cpu_(false),
       enable_dsp_(false),
@@ -267,7 +267,7 @@ Subgraph::Subgraph(ErrorReporter* error_reporter,
   tensors_.reserve(kTensorsReservedCapacity);
   nodes_and_registration_.reserve(kTensorsReservedCapacity);
   // jianyu: set dispatch thread affinity
-  sxr::setCurrentThreadAffinityMask(7);
+  // sxr::setCurrentThreadAffinityMask(7);
   // Invalid to call these except from TfLiteDelegate
   SwitchToKernelContext();
 }
@@ -1229,6 +1229,9 @@ TfLiteStatus Subgraph::Invoke() {
   energy_profiler_.Resume();
   TFLITE_SCOPED_TAGGED_DEFAULT_PROFILE(profiler_.get(), "Invoke");
 
+  // jianyu: Record waiting time
+  std::vector<std::chrono::microseconds> gpu_wait_ms, dsp_wait_ms;
+
   // jianyu: Starting working threads for CPU and DSP
   std::future<void> dsp_future;
   unsigned char state = kMPFlagSeq;
@@ -1351,12 +1354,16 @@ TfLiteStatus Subgraph::Invoke() {
         }
       }
       cpu_executing.clear();
-      // auto t0 = std::chrono::high_resolution_clock::now();
+      auto t0 = std::chrono::high_resolution_clock::now();
       if (enable_dsp_ && dsp_future.valid()) {
         dsp_future.wait();
+        auto t1 = std::chrono::high_resolution_clock::now();
+        dsp_wait_ms.push_back(std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0));
       }
       if (enable_gpu_ && (gpu_registration != nullptr)) {
         gpu_registration->wait_for_completion(&context_, gpu_node);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        gpu_wait_ms.push_back(std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0));
         gpu_registration = nullptr;
       }
       // auto t1 = std::chrono::high_resolution_clock::now();
@@ -1419,7 +1426,15 @@ TfLiteStatus Subgraph::Invoke() {
     MaybeReleaseDynamicInputs(node, node_index);
   }
 
-  energy_profiler_.Pause();
+  // energy_profiler_.Pause();
+
+  // Print wait time
+  for (int i = 0; i < gpu_wait_ms.size(); ++i) {
+    std::cout << "GPU stage " << i << ": waiting for " << gpu_wait_ms[i].count() << std::endl;
+  }
+  for (int i = 0; i < dsp_wait_ms.size(); ++i) {
+    std::cout << "DSP stage " << i << ": waiting for " << dsp_wait_ms[i].count() << std::endl;
+  }
 
   return status;
 }

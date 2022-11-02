@@ -8,7 +8,7 @@ namespace jianyu {
 
 namespace {
 
-const std::string USB_CURRENT = "/sys/class/power_supply/usb/input_current_now";
+const std::string USB_CURRENT = "/sys/class/power_supply/usb/current_now";
 const std::string USB_VOLTAGE = "/sys/class/power_supply/usb/voltage_now";
 const std::string BAT_CURRENT = "/sys/class/power_supply/battery/current_now";
 const std::string BAT_VOLTAGE = "/sys/class/power_supply/battery/voltage_now";
