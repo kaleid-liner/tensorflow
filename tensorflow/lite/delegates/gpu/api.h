@@ -314,6 +314,8 @@ class InferenceRunner {
 
   virtual absl::Status Run() = 0;
   virtual absl::Status RunAsync() = 0;
+  virtual absl::Status PreRunAsync() = 0;
+  virtual absl::Status PostRunAsync() = 0;
 
   virtual absl::Status WaitForCompletion() = 0;
 };

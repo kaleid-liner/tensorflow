@@ -9,6 +9,7 @@ namespace jianyu {
 namespace {
 
 const std::string USB_CURRENT = "/sys/class/power_supply/usb/current_now";
+const std::string USB_CURRENT_FALLBACK = "/sys/class/power_supply/usb/input_current_now";
 const std::string USB_VOLTAGE = "/sys/class/power_supply/usb/voltage_now";
 const std::string BAT_CURRENT = "/sys/class/power_supply/battery/current_now";
 const std::string BAT_VOLTAGE = "/sys/class/power_supply/battery/voltage_now";
@@ -17,6 +18,9 @@ int ReadFromFile(std::string filename) {
   std::ifstream fs(filename);
   std::string content;
   fs >> content;
+  if (content.empty()) {
+    return ReadFromFile(USB_CURRENT_FALLBACK);
+  }
   return std::stoi(content);
 }
 

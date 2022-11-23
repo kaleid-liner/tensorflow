@@ -532,6 +532,84 @@ class CpuCopier : public OpenClConverterImpl {
   bool async_;
 };
 
+// Maps data from/to CPU into a tensor.
+class CpuMapper : public OpenClConverterImpl {
+ public:
+  explicit CpuMapper(bool asynchronous = false) : async_(asynchronous) {}
+  static bool IsSupported(const ObjectDef& input, const ObjectDef& output) {
+    return input.data_type == output.data_type &&
+           input.data_layout == output.data_layout &&
+           ((input.object_type == ObjectType::CPU_MEMORY &&
+             IsOpenClTextureOrBuffer(output.object_type)) ||
+            (output.object_type == ObjectType::CPU_MEMORY &&
+             IsOpenClTextureOrBuffer(input.object_type)));
+  }
+
+  absl::Status Init(const TensorObjectDef& input_def,
+                    const TensorObjectDef& output_def,
+                    Environment* environment) final {
+    region_ = CalculateTextureRegion(
+        input_def.object_def.object_type == ObjectType::CPU_MEMORY ? output_def
+                                                                   : input_def);
+    queue_ = environment->queue();
+    return absl::OkStatus();
+  }
+
+  absl::Status Convert(const TensorObject& input_obj,
+                       const TensorObject& output_obj) override {
+    auto cpu_input = absl::get_if<CpuMemory>(&input_obj);
+    auto cpu_output = absl::get_if<CpuMemory>(&output_obj);
+    if (cpu_input) {
+      auto buffer_output = absl::get_if<OpenClBuffer>(&output_obj);
+      if (buffer_output) {
+        return queue_->EnqueueUnmapBuffer(buffer_output->memobj,
+                                          cpu_input->data);
+      }
+    } else if (cpu_output) {
+      auto buffer_input = absl::get_if<OpenClBuffer>(&input_obj);
+      if (buffer_input) {
+        return queue_->EnqueueMapBuffer(buffer_input->memobj,
+                                        cpu_output->size_bytes,
+                                        async_,
+                                        true);
+      }
+    }
+    return absl::InternalError("Unexpected object");
+  }
+
+  absl::Status PreConvert(const TensorObject& input_obj,
+                          const TensorObject& output_obj) override {
+    auto cpu_input = absl::get_if<CpuMemory>(&input_obj);
+    auto cpu_output = absl::get_if<CpuMemory>(&output_obj);
+    if (cpu_input) {
+      auto buffer_output = absl::get_if<OpenClBuffer>(&output_obj);
+      if (buffer_output) {
+        return queue_->EnqueueMapBuffer(buffer_output->memobj,
+                                        cpu_input->size_bytes,
+                                        async_,
+                                        false);
+      }
+    }
+    return absl::InternalError("Unexpected object");
+  }
+
+  absl::Status PostConvert(const TensorObject& input_obj,
+                           const TensorObject& output_obj) override {
+    if (cpu_output) {
+      auto buffer_input = absl::get_if<OpenClBuffer>(&input_obj);
+      if (buffer_input) {
+        return queue_->EnqueueUnmapBuffer(buffer_input->memobj,
+                                          cpu_output->data);
+      }
+    }
+    return absl::InternalError("Unexpected object");
+  }
+
+ private:
+  std::array<size_t, 3> region_;
+  bool async_;
+};
+
 class OpenClTensorConverterBuilder : public TensorObjectConverterBuilder {
  public:
   explicit OpenClTensorConverterBuilder(Environment* environment)
@@ -559,6 +637,8 @@ class OpenClTensorConverterBuilder : public TensorObjectConverterBuilder {
       impl = absl::make_unique<TrivialCopier>();
     } else if (TensorToTensorConverter::IsSupported(input_def, output_def)) {
       impl = absl::make_unique<TensorToTensorConverter>();
+    } else if (CpuMapper::IsSupported(input_def, output_def)) {
+      impl = absl::make_unique<CpuMapper>(true);
     } else if (CpuCopier::IsSupported(input_def, output_def)) {
       impl = absl::make_unique<CpuCopier>(/*asynchronous*/ true);
     } else if (TensorToBHWCBufferConverter::IsSupported(input_def,

@@ -234,6 +234,14 @@ class Delegate {
     return runner_->RunAsync();
   }
 
+  absl::Status PreInvokeAsync(TfLiteContext* context) {
+    return runner_->PreRunAsync();
+  }
+
+  absl::Status PostInvokeAsync(TfLiteContext* context) {
+    return runner_->PostRunAsync();
+  }
+
   absl::Status WaitForCompletion(TfLiteContext* context) {
     return runner_->WaitForCompletion()
   }

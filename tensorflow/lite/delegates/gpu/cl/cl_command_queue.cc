@@ -20,6 +20,7 @@ limitations under the License.
 #include <string>
 #include <utility>
 #include <vector>
+#include <iostream>
 
 #include "absl/strings/str_cat.h"
 #include "tensorflow/lite/delegates/gpu/cl/cl_device.h"
@@ -72,6 +73,9 @@ absl::Status CLCommandQueue::Dispatch(const CLKernel& kernel,
   const int error_code = clEnqueueNDRangeKernel(
       queue_, kernel.kernel(), 3, nullptr, global.data(), local.data(), 0,
       nullptr, event ? &resulting_event : nullptr);
+  CLEvent clevent(event);
+  clevent.SetName("Kernel");
+  all_events_.push_back(std::move(clevent));
   if (event) {
     *event = CLEvent(resulting_event);
   }
@@ -162,6 +166,63 @@ absl::Status CLCommandQueue::EnqueueReadBuffer(cl_mem memory,
                      CLErrorCodeToString(error_code)));
   }
   return absl::OkStatus();
+}
+
+absl::Status CLCommandQueue::EnqueueMapBuffer(cl_mem memory,
+                                              size_t size_in_bytes,
+                                              bool async,
+                                              bool read) {
+  const cl_bool blocking = async ? CL_FALSE : CL_TRUE;
+  cl_int error_code;
+  cl_event event;
+  clEnqueueMapBuffer(
+      queue_, memory, blocking,
+      read ? CL_MAP_READ : CL_MAP_WRITE_INVALIDATE_REGION,
+      0, size_in_bytes, 0, nullptr, &event, &error_code);
+  CLEvent clevent(event);
+  clevent.SetName("Map");
+  all_events_.push_back(std::move(clevent));
+  if (error_code != CL_SUCCESS) {
+    return absl::UnknownError(
+        absl::StrCat("Failed to map data to CPU (clEnqueueMapBuffer) - ",
+                     CLErrorCodeToString(error_code)));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status CLCommandQueue::EnqueueUnmapBuffer(cl_mem memory,
+                                                void* data) {
+  cl_event event;
+  cl_int error_code = clEnqueueUnmapMemObject(
+      queue_, memory, data, 0, nullptr, &event);
+  CLEvent clevent(event);
+  clevent.SetName("Unmap");
+  all_events_.push_back(std::move(clevent));
+  if (error_code != CL_SUCCESS) {
+    return absl::UnknownError(
+        absl::StrCat("Failed to unmap data to CPU (clEnqueueUnmapMemObject) - ",
+                     CLErrorCodeToString(error_code)));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status CLCommandQueue::LogEventsTime() const {
+  uint64_t time;
+  for (const CLEvent& event : all_events_) {
+    if (event.GetName() == "Unmap") {
+      time = event.GetQueuedTimeNs();
+      std::cout << "Unmap::Queued: " << time << std::endl;
+    } else if (event.GetName() == "Map") {
+      time = event.GetFinishedTimeNs();
+      std::cout << "Map::Finished: " << time << std::endl;
+    } else if (event.GetName() == "Kernel") {
+      time = event.GetStartedTimeNs();
+      std::cout << "Kernel::Started: " << time << std::endl;
+      time = event.GetFinishedTimeNs();
+      std::cout << "Kernel::Finished: " << time << std::endl;
+    }
+  }
+  // all_events_.clear();
 }
 
 absl::Status CLCommandQueue::WaitForCompletion() {

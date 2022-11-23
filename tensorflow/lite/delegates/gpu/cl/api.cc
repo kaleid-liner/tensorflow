@@ -131,6 +131,20 @@ class DefaultTensorTie : public TensorTie {
     return converter_from_->Convert(GetExternalObject(), internal_obj_);
   }
 
+  absl::Status PostCopyToExternalObject() final {
+    if (!converter_to_) {
+      return absl::UnavailableError("Conversion is not available");
+    }
+    return converter_to_->PostConvert(internal_obj_, GetExternalObject());
+  }
+
+  absl::Status PreCopyFromExternalObject() final {
+    if (!converter_from_) {
+      return absl::UnavailableError("Conversion is not available");
+    }
+    return converter_from_->PreConvert(GetExternalObject(), internal_obj_);
+  }
+
   absl::Status SetExternalObject(TensorObject obj) final {
     if (!def().external_def.object_def.user_provided) {
       return absl::InvalidArgumentError("External object is read-only");
@@ -251,6 +265,16 @@ class TwoStepTensorTie : public TensorTie {
   absl::Status CopyFromExternalObject() final {
     RETURN_IF_ERROR(outer_tie_->CopyFromExternalObject());
     return inner_tie_->CopyFromExternalObject();
+  }
+
+  absl::Status PostCopyToExternalObject() final {
+    RETURN_IF_ERROR(inner_tie_->PostCopyToExternalObject());
+    return outer_tie_->PostCopyToExternalObject();
+  }
+
+  absl::Status PreCopyFromExternalObject() final {
+    RETURN_IF_ERROR(outer_tie_->PreCopyFromExternalObject());
+    return inner_tie_->PreCopyFromExternalObject();
   }
 
   absl::Status SetExternalObject(TensorObject obj) final {
@@ -556,20 +580,29 @@ class InferenceRunnerImpl : public CLInferenceRunner {
       RETURN_IF_ERROR(gl_interop_fabric_->Start());
     }
 #endif
-    // for (const auto& input : inputs_) {
-    //   RETURN_IF_ERROR(input->CopyFromExternalObject());
-    // }
+    for (const auto& input : inputs_) {
+      RETURN_IF_ERROR(input->CopyFromExternalObject());
+    }
 
     RETURN_IF_ERROR(RunWithoutExternalBufferCopy());
 
-    // for (const auto& output : outputs_) {
-    //   RETURN_IF_ERROR(output->CopyToExternalObject());
-    //   if (output->def().external_def.object_def.object_type ==
-    //       ObjectType::CPU_MEMORY) {
-    //   }
-    // }
+    for (const auto& output : outputs_) {
+      RETURN_IF_ERROR(output->CopyToExternalObject());
+    }
 
     return absl::OkStatus();
+  }
+
+  absl::Status PreRunAsync() override {
+    for (const auto& input : inputs_) {
+      RETURN_IF_ERROR(input->PreCopyFromExternalObject());
+    }
+  }
+
+  absl::Status PostRunAsync() override {
+    for (const auto& output : outputs_) {
+      RETURN_IF_ERROR(output->PostCopyToExternalObject());
+    }
   }
 
   absl::Status WaitForCompletion() override {
@@ -579,6 +612,7 @@ class InferenceRunnerImpl : public CLInferenceRunner {
     }
 #endif
     RETURN_IF_ERROR(queue_->WaitForCompletion());
+    queue_->LogEventsTime();
     return absl::OkStatus();
   }
 

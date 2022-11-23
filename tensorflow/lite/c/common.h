@@ -911,6 +911,10 @@ typedef struct TfLiteRegistration {
   TfLiteStatus (*invoke_async)(TfLiteContext* context, TfLiteNode* node);
 
   TfLiteStatus (*wait_for_completion)(TfLiteContext* context, TfLiteNode* node);
+
+  TfLiteStatus (*pre_invoke_async)(TfLiteContext* context, TfLiteNode* node);
+
+  TfLiteStatus (*post_invoke_async)(TfLiteContext* context, TfLiteNode* node);
 } TfLiteRegistration;
 
 // The flags used in `TfLiteDelegate`. Note that this is a bitmask, so the

@@ -51,6 +51,13 @@ uint64_t CLEvent::GetFinishedTimeNs() const {
   return time_ns;
 }
 
+uint64_t CLEvent::GetQueuedTimeNs() const {
+  cl_ulong time_ns;
+  clGetEventProfilingInfo(event_, CL_PROFILING_COMMAND_QUEUED, sizeof(cl_ulong),
+                          &time_ns, nullptr);
+  return time_ns;
+}
+
 double CLEvent::GetEventTimeMs() const {
   const uint64_t start = GetStartedTimeNs();
   const uint64_t end = GetFinishedTimeNs();

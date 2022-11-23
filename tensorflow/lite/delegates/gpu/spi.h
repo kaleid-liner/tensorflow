@@ -35,6 +35,15 @@ class TensorObjectConverter {
 
   virtual absl::Status Convert(const TensorObject& input,
                                const TensorObject& output) = 0;
+
+  virtual absl::Status PreConvert(const TensorObject& input,
+                                  const TensorObject& output) { 
+    return absl::OkStatus(); 
+  }
+  virtual absl::Status PostConvert(const TensorObject& input,
+                                   const TensorObject& output) {
+    return absl::OkStatus();
+  }
 };
 
 class TensorObjectConverterBuilder {
@@ -73,6 +82,10 @@ class TensorTie {
   virtual absl::Status CopyToExternalObject() = 0;
 
   virtual absl::Status CopyFromExternalObject() = 0;
+
+  virtual absl::Status PreCopyFromExternalObject() { return absl::OkStatus(); }
+
+  virtual absl::Status PostCopyToExternalObject() { return absl::OkStatus(); }
 
   const TensorTieDef& def() const { return def_; }
 

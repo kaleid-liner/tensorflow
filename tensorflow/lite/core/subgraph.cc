@@ -560,6 +560,7 @@ TfLiteStatus Subgraph::GetNodeName(const TfLiteNode* node, char** node_name) {
     tensor_name = output_tensor->name;
   }
   tensor_name = tensor_name.substr(0, tensor_name.find_first_of(';'));
+  // tensor_name = "conv_dsp";
   *node_name = new char[tensor_name.length() + 1];
   size_t len = tensor_name.copy(*node_name, tensor_name.length(), 0);
   (*node_name)[len] = '\0';
@@ -1223,10 +1224,8 @@ TfLiteStatus Subgraph::Invoke() {
     ReportError("Non-persistent memory is not available.");
     return kTfLiteError;
   }
-  std::cout << energy_profiler_.GetAvgPower() << std::endl;
-  std::cout << energy_profiler_.GetMovingPower() << std::endl;
-  // std::cout << wait_us_.count() << std::endl;
   energy_profiler_.Resume();
+  {
   TFLITE_SCOPED_TAGGED_DEFAULT_PROFILE(profiler_.get(), "Invoke");
 
   // jianyu: Record waiting time
@@ -1238,12 +1237,65 @@ TfLiteStatus Subgraph::Invoke() {
   std::vector<int> cpu_executing;
   const TfLiteRegistration* gpu_registration = nullptr;
   TfLiteNode* gpu_node;
+  int gpu_index = 0;
 
-  // jianyu: not first invoked
-  if (enable_cpu_ || enable_gpu_ || enable_dsp_) {
+  // Prepare before first invoke
+  if (mp_flags_.empty()) {
+    for (int execution_plan_index = 0;
+        execution_plan_index < execution_plan_.size(); execution_plan_index++) {
+      int node_index = execution_plan_[execution_plan_index];
+      TfLiteNode& node = nodes_and_registration_[node_index].first;
+      const TfLiteRegistration& registration =
+          nodes_and_registration_[node_index].second;
+
+      // jianyu: assign device and plan execution according to node name
+      if (mp_flags_.find(node_index) == mp_flags_.end()) {
+        // std::cout << node_index << std::endl;
+        char* c_node_name;
+        GetNodeName(&node, &c_node_name);
+        std::string node_name = c_node_name;
+        unsigned char flag = 0;
+        if ((node_name.find("gpu") != std::string::npos)
+  #ifdef GPU_HEAD
+        || (node_name.find("StatefulPartitionedCall") != std::string::npos)
+  #endif
+        ) {
+          flag |= kMPFlagGpu;
+          enable_gpu_ = true;
+          gpu_nodes_.append(node_index);
+        } else if (node_name.find("dsp") != std::string::npos) {
+          flag |= kMPFlagDsp;
+          enable_dsp_ = true;
+        } else {
+          flag |= kMPFlagCpu;
+          enable_cpu_ = true;
+        }
+        if (node_name.find("mp_start") != std::string::npos) {
+          flag |= kMPFlagStart;
+        }
+        if (node_name.find("mp_end") != std::string::npos) {
+          flag |= kMPFlagEnd;
+        }
+        if (!(flag & kMPFlagStart) && !(flag & kMPFlagEnd)) {
+          flag |= kMPFlagSeq;
+        }
+        delete [] c_node_name;
+        mp_flags_[node_index] = flag;
+        // std::cout << node_name << ": " << (int)flag << std::endl;
+      }
+    }
+
     if (!enable_dsp_) {
       dsp_thread_.stop();
     }
+  }
+
+  // Prepare the first gpu node.
+  if (enable_gpu_) {
+    TfLiteNode& first_gpu_node = nodes_and_registration_[gpu_nodes_[0]].first;
+    const TfLiteRegistration& first_gpu_registration =
+        nodes_and_registration_[gpu_nodes_[0]].second;
+    first_gpu_registration.pre_invoke_async(&context_, &first_gpu_node);
   }
 
   // Invocations are always done in node order.
@@ -1265,41 +1317,6 @@ TfLiteStatus Subgraph::Invoke() {
     const char* op_name = nullptr;
     if (profiler_) op_name = GetTFLiteOpName(registration);
     TFLITE_SCOPED_TAGGED_OPERATOR_PROFILE(profiler_.get(), op_name, node_index);
-
-    // jianyu: assign device and plan execution according to node name
-    if (mp_flags_.find(node_index) == mp_flags_.end()) {
-      // std::cout << node_index << std::endl;
-      char* c_node_name;
-      GetNodeName(&node, &c_node_name);
-      std::string node_name = c_node_name;
-      unsigned char flag = 0;
-      if ((node_name.find("gpu") != std::string::npos)
-#ifdef GPU_HEAD
-       || (node_name.find("StatefulPartitionedCall") != std::string::npos)
-#endif
-      ) {
-        flag |= kMPFlagGpu;
-        enable_gpu_ = true;
-      } else if (node_name.find("dsp") != std::string::npos) {
-        flag |= kMPFlagDsp;
-        enable_dsp_ = true;
-      } else {
-        flag |= kMPFlagCpu;
-        enable_cpu_ = true;
-      }
-      if (node_name.find("mp_start") != std::string::npos) {
-        flag |= kMPFlagStart;
-      }
-      if (node_name.find("mp_end") != std::string::npos) {
-        flag |= kMPFlagEnd;
-      }
-      if (!(flag & kMPFlagStart) && !(flag & kMPFlagEnd)) {
-        flag |= kMPFlagSeq;
-      }
-      delete [] c_node_name;
-      mp_flags_[node_index] = flag;
-      // std::cout << node_name << ": " << (int)flag << std::endl;
-    }
 
     for (int i = 0; i < node.inputs->size; ++i) {
       int tensor_index = node.inputs->data[i];
@@ -1344,6 +1361,14 @@ TfLiteStatus Subgraph::Invoke() {
     // std::cout << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
     unsigned char mp_flag = mp_flags_[node_index];
     if (mp_flag & kMPFlagEnd) {
+      if (gpu_index < gpu_nodes_.size()) {
+        int gpu_node_index = gpu_nodes_[gpu_index];
+        TfLiteNode& next_gpu_node = nodes_and_registration_[gpu_node_index].first;
+        const TfLiteRegistration& next_gpu_registration =
+            nodes_and_registration_[gpu_node_index].second;
+        next_gpu_registration.pre_invoke_async(&context_, &next_gpu_node);
+      }
+
       for (int cpu_node_index: cpu_executing) {
         TfLiteNode& cpu_node = nodes_and_registration_[cpu_node_index].first;
         const TfLiteRegistration& cpu_registration = 
@@ -1353,6 +1378,7 @@ TfLiteStatus Subgraph::Invoke() {
                               "failed to invoke");
         }
       }
+
       cpu_executing.clear();
       auto t0 = std::chrono::high_resolution_clock::now();
       if (enable_dsp_ && dsp_future.valid()) {
@@ -1366,8 +1392,6 @@ TfLiteStatus Subgraph::Invoke() {
         gpu_wait_ms.push_back(std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0));
         gpu_registration = nullptr;
       }
-      // auto t1 = std::chrono::high_resolution_clock::now();
-      // wait_us_ = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0);
       state = kMPFlagEnd;
     }
     if (mp_flag & kMPFlagStart) {
@@ -1383,6 +1407,10 @@ TfLiteStatus Subgraph::Invoke() {
               registration.invoke(context, node);
             });
           } else if (mp_flag & kMPFlagGpu) {
+            static_assert(gpu_nodes_[gpu_index] == node_index,
+                          "Wrong GPU node index");
+            ++gpu_index;
+
             gpu_registration = &registration;
             gpu_node = &node;
             registration.invoke_async(&context_, &node);
@@ -1425,8 +1453,9 @@ TfLiteStatus Subgraph::Invoke() {
     // Release dynamic tensor memory if configured by the user.
     MaybeReleaseDynamicInputs(node, node_index);
   }
+  } // TFLITE_SCOPED_TAGGED_DEFAULT_PROFILE(profiler_.get(), "Invoke");
 
-  // energy_profiler_.Pause();
+  energy_profiler_.Pause();
 
   // Print wait time
   for (int i = 0; i < gpu_wait_ms.size(); ++i) {
@@ -1434,6 +1463,16 @@ TfLiteStatus Subgraph::Invoke() {
   }
   for (int i = 0; i < dsp_wait_ms.size(); ++i) {
     std::cout << "DSP stage " << i << ": waiting for " << dsp_wait_ms[i].count() << std::endl;
+  }
+
+  std::cout << energy_profiler_.GetAvgPower() << std::endl;
+  std::cout << energy_profiler_.GetMovingPower() << std::endl;
+
+  for (int i : gpu_nodes_) {
+    TfLiteNode& gpu_node = nodes_and_registration_[i].first;
+    const TfLiteRegistration& last_gpu_registration =
+        nodes_and_registration_[i].second;
+    prev_gpu_registration.post_invoke_async(&context_, &gpu_node);
   }
 
   return status;

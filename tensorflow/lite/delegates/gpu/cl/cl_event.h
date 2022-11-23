@@ -41,6 +41,7 @@ class CLEvent {
 
   uint64_t GetStartedTimeNs() const;
   uint64_t GetFinishedTimeNs() const;
+  uint64_t GetQueuedTimeNs() const;
 
   double GetEventTimeMs() const;
   uint64_t GetEventTimeNs() const;

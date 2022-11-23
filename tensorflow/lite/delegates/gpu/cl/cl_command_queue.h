@@ -68,13 +68,22 @@ class CLCommandQueue {
   absl::Status EnqueueReadBuffer(cl_mem memory, size_t size_in_bytes,
                                  void* data, bool async = false);
 
+  absl::Status EnqueueMapBuffer(cl_mem memory, size_t size_in_bytes,
+                                bool async = false, bool read = false);
+  absl::Status EnqueueUnmapBuffer(cl_mem memory, const void* data);
+
   absl::Status WaitForCompletion();
+
+  absl::Status LogEventsTime() const;
 
  protected:
   void Release();
 
   cl_command_queue queue_ = nullptr;
   bool has_ownership_ = false;
+
+private:
+  std::vector<CLEvent> all_events_;
 };
 
 class ProfilingCommandQueue : public CLCommandQueue {

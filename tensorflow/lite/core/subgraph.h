@@ -780,11 +780,11 @@ class Subgraph {
 
   bool enable_cpu_, enable_gpu_, enable_dsp_;
 
+  std::vector<int> gpu_nodes_;
+
   ctpl::thread_pool dsp_thread_;
 
   jianyu::EnergyProfiler energy_profiler_;
-
-  std::chrono::microseconds wait_us_;
 
   // The error reporter delegate that tflite will forward queries errors to.
   ErrorReporter* error_reporter_;
