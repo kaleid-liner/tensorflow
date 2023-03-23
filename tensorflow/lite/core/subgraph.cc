@@ -1225,8 +1225,6 @@ TfLiteStatus Subgraph::Invoke() {
     return kTfLiteError;
   }
   energy_profiler_.Resume();
-  {
-  TFLITE_SCOPED_TAGGED_DEFAULT_PROFILE(profiler_.get(), "Invoke");
 
   // jianyu: Record waiting time
   std::vector<std::chrono::microseconds> gpu_wait_ms, dsp_wait_ms;
@@ -1238,6 +1236,9 @@ TfLiteStatus Subgraph::Invoke() {
   const TfLiteRegistration* gpu_registration = nullptr;
   TfLiteNode* gpu_node;
   int gpu_index = 0;
+
+  {
+  TFLITE_SCOPED_TAGGED_DEFAULT_PROFILE(profiler_.get(), "Invoke");
 
   // Prepare before first invoke
   if (mp_flags_.empty()) {
