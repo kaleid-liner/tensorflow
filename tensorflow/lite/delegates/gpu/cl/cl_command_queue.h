@@ -29,6 +29,8 @@ limitations under the License.
 #include "tensorflow/lite/delegates/gpu/common/task/profiling_info.h"
 #include "tensorflow/lite/delegates/gpu/common/types.h"
 
+// #define IS_PROFILING
+
 namespace tflite {
 namespace gpu {
 namespace cl {
@@ -70,11 +72,11 @@ class CLCommandQueue {
 
   absl::Status EnqueueMapBuffer(cl_mem memory, size_t size_in_bytes,
                                 bool async = false, bool read = false);
-  absl::Status EnqueueUnmapBuffer(cl_mem memory, const void* data);
+  absl::Status EnqueueUnmapBuffer(cl_mem memory, void* data);
 
   absl::Status WaitForCompletion();
 
-  absl::Status LogEventsTime() const;
+  absl::Status LogEventsTime();
 
  protected:
   void Release();

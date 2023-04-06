@@ -580,7 +580,6 @@ class CpuMapper : public OpenClConverterImpl {
   absl::Status PreConvert(const TensorObject& input_obj,
                           const TensorObject& output_obj) override {
     auto cpu_input = absl::get_if<CpuMemory>(&input_obj);
-    auto cpu_output = absl::get_if<CpuMemory>(&output_obj);
     if (cpu_input) {
       auto buffer_output = absl::get_if<OpenClBuffer>(&output_obj);
       if (buffer_output) {
@@ -590,11 +589,12 @@ class CpuMapper : public OpenClConverterImpl {
                                         false);
       }
     }
-    return absl::InternalError("Unexpected object");
+    return absl::OkStatus();
   }
 
   absl::Status PostConvert(const TensorObject& input_obj,
                            const TensorObject& output_obj) override {
+    auto cpu_output = absl::get_if<CpuMemory>(&output_obj);
     if (cpu_output) {
       auto buffer_input = absl::get_if<OpenClBuffer>(&input_obj);
       if (buffer_input) {
@@ -602,7 +602,7 @@ class CpuMapper : public OpenClConverterImpl {
                                           cpu_output->data);
       }
     }
-    return absl::InternalError("Unexpected object");
+    return absl::OkStatus();
   }
 
  private:

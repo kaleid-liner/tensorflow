@@ -262,7 +262,6 @@ class DelegateKernel {
       RETURN_IF_ERROR(
           DequantizeInputs(context, input_indices_, quant_conversion_map_));
     }
-    RETURN_IF_ERROR(SetInputsAndOutputs(context));
     RETURN_IF_ERROR(runner_->RunAsync());
     // if (is_dequant_required) {
     //   RETURN_IF_ERROR(
@@ -286,6 +285,7 @@ class DelegateKernel {
       }
     }
 
+    RETURN_IF_ERROR(SetInputsAndOutputs(context));
     return runner_->PreRunAsync();
   }
 

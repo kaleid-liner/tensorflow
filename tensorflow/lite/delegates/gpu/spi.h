@@ -87,6 +87,10 @@ class TensorTie {
 
   virtual absl::Status PostCopyToExternalObject() { return absl::OkStatus(); }
 
+  virtual TensorObject GetInternalObject() { return OpenClBuffer(nullptr); }
+
+  virtual absl::Status MaybeAllocateInternalObject(const void* cl_context) { return absl::OkStatus(); }
+
   const TensorTieDef& def() const { return def_; }
 
  private:

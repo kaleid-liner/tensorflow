@@ -230,11 +230,11 @@ class Delegate {
   }
 
   absl::Status InvokeAsync(TfLiteContext* context) {
-    RETURN_IF_ERROR(SetInputsAndOutputs(context));
     return runner_->RunAsync();
   }
 
   absl::Status PreInvokeAsync(TfLiteContext* context) {
+    RETURN_IF_ERROR(SetInputsAndOutputs(context));
     return runner_->PreRunAsync();
   }
 

@@ -146,9 +146,9 @@ class DefaultTensorTie : public TensorTie {
   }
 
   absl::Status SetExternalObject(TensorObject obj) final {
-    if (!def().external_def.object_def.user_provided) {
-      return absl::InvalidArgumentError("External object is read-only");
-    }
+    // if (!def().external_def.object_def.user_provided) {
+    //   return absl::InvalidArgumentError("External object is read-only");
+    // }
     if (!IsValid(def().external_def, obj)) {
       return absl::InvalidArgumentError("Given object is not valid");
     }
@@ -157,6 +157,41 @@ class DefaultTensorTie : public TensorTie {
   }
 
   TensorObject GetExternalObject() final { return external_obj_; }
+
+  TensorObject GetInternalObject() final { return internal_obj_; }
+
+  absl::Status MaybeAllocateInternalObject(const void* cl_context) final {
+    const CLContext* p_cl_context = static_cast<const CLContext *>(cl_context);
+    auto external_cpu = absl::get_if<CpuMemory>(&external_obj_);
+    auto internal_buffer = absl::get_if<OpenClBuffer>(&internal_obj_);
+    if (external_cpu &&
+        internal_buffer && 
+        (internal_buffer->memobj == nullptr)) {
+      const TensorObjectDef& d = def().internal_def;
+      auto& dims = d.dimensions;
+      const BHWDC shape(dims.b, dims.h, dims.w, 1, dims.c);
+      const TensorDescriptor desc{
+          d.object_def.data_type,
+          ToTensorStorageType(d.object_def.object_type,
+                              d.object_def.data_layout),
+          Layout::BHWC};
+      const int slices = DivideRoundUp(shape.c, 4);
+      cl_mem_flags mem_flags = CL_MEM_READ_WRITE;
+      mem_flags |= CL_MEM_USE_HOST_PTR;
+      const size_t data_size = shape.b * shape.w * shape.h * shape.d * slices *
+                      4 * SizeOf(desc.data_type);
+      cl_int error_code;
+      cl_mem memory = clCreateBuffer(p_cl_context->context(), mem_flags, data_size,
+                                     const_cast<void*>(external_cpu->data), &error_code);
+      if (!memory) {
+        return absl::UnknownError(
+            absl::StrCat("Failed to allocate device memory (clCreateBuffer): ",
+                         CLErrorCodeToString(error_code)));
+      }
+      internal_obj_ = OpenClBuffer{memory};
+    }
+    return absl::OkStatus();
+  }
 
  private:
   absl::Status Init(TensorObjectConverterBuilder* converter_builder,
@@ -201,8 +236,7 @@ class DefaultTensorTie : public TensorTie {
         external_obj_ = CpuMemory{cpu_memory_.data(), cpu_memory_.size()};
         break;
       }
-      case ObjectType::OPENCL_TEXTURE:
-      case ObjectType::OPENCL_BUFFER: {
+      case ObjectType::OPENCL_TEXTURE: {
         auto& dims = d.dimensions;
         const BHWC shape(dims.b, dims.h, dims.w, dims.c);
         const TensorDescriptor desc{
@@ -219,13 +253,16 @@ class DefaultTensorTie : public TensorTie {
         }
         break;
       }
+      case ObjectType::OPENCL_BUFFER:
+        external_obj_ = OpenClBuffer{nullptr};
+        break;
       default:
         return absl::InternalError("Unexpected object type");
     }
     return absl::OkStatus();
   }
 
-  const TensorObject internal_obj_;
+  TensorObject internal_obj_;
   TensorObject external_obj_;
   CLMemory cl_memory_;
   std::vector<uint8_t> cpu_memory_;
@@ -258,13 +295,14 @@ class TwoStepTensorTie : public TensorTie {
   }
 
   absl::Status CopyToExternalObject() final {
-    RETURN_IF_ERROR(inner_tie_->CopyToExternalObject());
+    //RETURN_IF_ERROR(inner_tie_->CopyToExternalObject());
     return outer_tie_->CopyToExternalObject();
   }
 
   absl::Status CopyFromExternalObject() final {
     RETURN_IF_ERROR(outer_tie_->CopyFromExternalObject());
-    return inner_tie_->CopyFromExternalObject();
+    //return inner_tie_->CopyFromExternalObject();
+    return absl::OkStatus();
   }
 
   absl::Status PostCopyToExternalObject() final {
@@ -279,6 +317,11 @@ class TwoStepTensorTie : public TensorTie {
 
   absl::Status SetExternalObject(TensorObject obj) final {
     return outer_tie_->SetExternalObject(obj);
+  }
+
+  absl::Status MaybeAllocateInternalObject(const void* cl_context) final {
+    RETURN_IF_ERROR(outer_tie_->MaybeAllocateInternalObject(cl_context));
+    return inner_tie_->SetExternalObject(outer_tie_->GetInternalObject());
   }
 
   TensorObject GetExternalObject() final {
@@ -474,7 +517,8 @@ class InferenceRunnerImpl : public CLInferenceRunner {
 #endif
                       )
       : queue_(environment->queue()),
-        context_(std::move(context))
+        context_(std::move(context)),
+        cl_context_(environment->context())
 #ifdef CL_DELEGATE_ALLOW_GL
         ,
         gl_interop_fabric_(std::move(gl_interop_fabric))
@@ -517,14 +561,16 @@ class InferenceRunnerImpl : public CLInferenceRunner {
     if (index < 0 || index >= inputs_.size()) {
       return absl::OutOfRangeError("Input index is out of range");
     }
-    return inputs_[index]->SetExternalObject(object);
+    RETURN_IF_ERROR(inputs_[index]->SetExternalObject(object));
+    return inputs_[index]->MaybeAllocateInternalObject(&cl_context_);
   }
 
   absl::Status SetOutputObject(int index, TensorObject object) override {
     if (index < 0 || index >= outputs_.size()) {
       return absl::OutOfRangeError("Output index is out of range");
     }
-    return outputs_[index]->SetExternalObject(object);
+    RETURN_IF_ERROR(outputs_[index]->SetExternalObject(object));
+    return outputs_[index]->MaybeAllocateInternalObject(&cl_context_);
   }
 
   absl::Status CopyFromExternalInput(int index) override {
@@ -612,8 +658,11 @@ class InferenceRunnerImpl : public CLInferenceRunner {
     }
 #endif
     RETURN_IF_ERROR(queue_->WaitForCompletion());
-    queue_->LogEventsTime();
+#ifdef IS_PROFILING
+    return queue_->LogEventsTime();
+#else
     return absl::OkStatus();
+#endif
   }
 
   absl::Status RunWithoutExternalBufferCopy() override {
@@ -653,6 +702,7 @@ class InferenceRunnerImpl : public CLInferenceRunner {
 #endif
   std::vector<std::unique_ptr<TensorTie>> inputs_;
   std::vector<std::unique_ptr<TensorTie>> outputs_;
+  const CLContext& cl_context_;
 };
 
 TensorObjectDef TensorToDef(const Tensor& tensor) {

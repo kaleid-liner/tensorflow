@@ -37,12 +37,14 @@ CLCommandQueue::CLCommandQueue(cl_command_queue queue, bool has_ownership)
     : queue_(queue), has_ownership_(has_ownership) {}
 
 CLCommandQueue::CLCommandQueue(CLCommandQueue&& queue)
-    : queue_(queue.queue_), has_ownership_(queue.has_ownership_) {
+    : queue_(queue.queue_), has_ownership_(queue.has_ownership_),
+      all_events_(std::move(queue.all_events_)) {
   queue.queue_ = nullptr;
 }
 
 CLCommandQueue& CLCommandQueue::operator=(CLCommandQueue&& queue) {
   if (this != &queue) {
+    all_events_ = std::move(queue.all_events_);
     Release();
     std::swap(queue_, queue.queue_);
     has_ownership_ = queue.has_ownership_;
@@ -72,10 +74,10 @@ absl::Status CLCommandQueue::Dispatch(const CLKernel& kernel,
   cl_event resulting_event;
   const int error_code = clEnqueueNDRangeKernel(
       queue_, kernel.kernel(), 3, nullptr, global.data(), local.data(), 0,
-      nullptr, event ? &resulting_event : nullptr);
-  CLEvent clevent(event);
-  clevent.SetName("Kernel");
-  all_events_.push_back(std::move(clevent));
+      nullptr, &resulting_event );
+  all_events_.push_back(CLEvent());
+  all_events_[all_events_.size() - 1] = CLEvent(resulting_event);
+  all_events_.back().SetName("Kernel");
   if (event) {
     *event = CLEvent(resulting_event);
   }
@@ -179,9 +181,9 @@ absl::Status CLCommandQueue::EnqueueMapBuffer(cl_mem memory,
       queue_, memory, blocking,
       read ? CL_MAP_READ : CL_MAP_WRITE_INVALIDATE_REGION,
       0, size_in_bytes, 0, nullptr, &event, &error_code);
-  CLEvent clevent(event);
-  clevent.SetName("Map");
-  all_events_.push_back(std::move(clevent));
+  all_events_.push_back(CLEvent());
+  all_events_[all_events_.size() - 1] = CLEvent(event);
+  all_events_.back().SetName("Map");
   if (error_code != CL_SUCCESS) {
     return absl::UnknownError(
         absl::StrCat("Failed to map data to CPU (clEnqueueMapBuffer) - ",
@@ -195,9 +197,9 @@ absl::Status CLCommandQueue::EnqueueUnmapBuffer(cl_mem memory,
   cl_event event;
   cl_int error_code = clEnqueueUnmapMemObject(
       queue_, memory, data, 0, nullptr, &event);
-  CLEvent clevent(event);
-  clevent.SetName("Unmap");
-  all_events_.push_back(std::move(clevent));
+  all_events_.push_back(CLEvent());
+  all_events_[all_events_.size() - 1] = CLEvent(event);
+  all_events_.back().SetName("Unmap");
   if (error_code != CL_SUCCESS) {
     return absl::UnknownError(
         absl::StrCat("Failed to unmap data to CPU (clEnqueueUnmapMemObject) - ",
@@ -206,23 +208,19 @@ absl::Status CLCommandQueue::EnqueueUnmapBuffer(cl_mem memory,
   return absl::OkStatus();
 }
 
-absl::Status CLCommandQueue::LogEventsTime() const {
-  uint64_t time;
-  for (const CLEvent& event : all_events_) {
-    if (event.GetName() == "Unmap") {
-      time = event.GetQueuedTimeNs();
-      std::cout << "Unmap::Queued: " << time << std::endl;
-    } else if (event.GetName() == "Map") {
-      time = event.GetFinishedTimeNs();
-      std::cout << "Map::Finished: " << time << std::endl;
-    } else if (event.GetName() == "Kernel") {
-      time = event.GetStartedTimeNs();
-      std::cout << "Kernel::Started: " << time << std::endl;
-      time = event.GetFinishedTimeNs();
-      std::cout << "Kernel::Finished: " << time << std::endl;
+absl::Status CLCommandQueue::LogEventsTime() {
+  for (int i = 0; i < all_events_.size(); i++) {
+    if (all_events_[i].GetName() == "Unmap") {
+      std::cout << "Unmap::Queued: " << all_events_[i].GetQueuedTimeNs() << std::endl;
+    } else if (all_events_[i].GetName() == "Map") {
+      std::cout << "Map::Finished: " << all_events_[i].GetFinishedTimeNs() << std::endl;
+    } else if (all_events_[i].GetName() == "Kernel") {
+      std::cout << "Kernel::Started: " << all_events_[i].GetStartedTimeNs() << std::endl;
+      std::cout << "Kernel::Finished: " << all_events_[i].GetFinishedTimeNs() << std::endl;
     }
   }
-  // all_events_.clear();
+  all_events_.clear();
+  return absl::OkStatus();
 }
 
 absl::Status CLCommandQueue::WaitForCompletion() {
@@ -398,8 +396,13 @@ absl::Status CreateCLCommandQueue(const CLDevice& device,
                                   const CLContext& context,
                                   CLCommandQueue* result) {
   int error_code;
-  cl_command_queue queue =
-      clCreateCommandQueue(context.context(), device.id(), 0, &error_code);
+#ifdef IS_PROFILING
+  cl_command_queue queue = clCreateCommandQueue(
+      context.context(), device.id(), CL_QUEUE_PROFILING_ENABLE, &error_code);
+#else
+  cl_command_queue queue = clCreateCommandQueue(
+      context.context(), device.id(), 0, &error_code);
+#endif
   if (!queue) {
     return absl::UnknownError(
         absl::StrCat("Failed to create a command queue - ",

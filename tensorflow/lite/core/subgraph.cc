@@ -1244,6 +1244,11 @@ TfLiteStatus Subgraph::Invoke() {
   if (mp_flags_.empty()) {
     for (int execution_plan_index = 0;
         execution_plan_index < execution_plan_.size(); execution_plan_index++) {
+      if (execution_plan_index == next_execution_plan_index_to_prepare_) {
+        TF_LITE_ENSURE_STATUS(PrepareOpsAndTensors());
+        TF_LITE_ENSURE(&context_, next_execution_plan_index_to_prepare_ >=
+                                      execution_plan_index);
+      }
       int node_index = execution_plan_[execution_plan_index];
       TfLiteNode& node = nodes_and_registration_[node_index].first;
       const TfLiteRegistration& registration =
@@ -1263,7 +1268,7 @@ TfLiteStatus Subgraph::Invoke() {
         ) {
           flag |= kMPFlagGpu;
           enable_gpu_ = true;
-          gpu_nodes_.append(node_index);
+          gpu_nodes_.push_back(node_index);
         } else if (node_name.find("dsp") != std::string::npos) {
           flag |= kMPFlagDsp;
           enable_dsp_ = true;
@@ -1408,8 +1413,7 @@ TfLiteStatus Subgraph::Invoke() {
               registration.invoke(context, node);
             });
           } else if (mp_flag & kMPFlagGpu) {
-            static_assert(gpu_nodes_[gpu_index] == node_index,
-                          "Wrong GPU node index");
+            TF_LITE_ENSURE_EQ(&context_, gpu_nodes_[gpu_index], node_index);
             ++gpu_index;
 
             gpu_registration = &registration;
@@ -1471,7 +1475,7 @@ TfLiteStatus Subgraph::Invoke() {
 
   for (int i : gpu_nodes_) {
     TfLiteNode& gpu_node = nodes_and_registration_[i].first;
-    const TfLiteRegistration& last_gpu_registration =
+    const TfLiteRegistration& prev_gpu_registration =
         nodes_and_registration_[i].second;
     prev_gpu_registration.post_invoke_async(&context_, &gpu_node);
   }
