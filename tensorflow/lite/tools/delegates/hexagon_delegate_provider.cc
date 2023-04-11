@@ -34,6 +34,8 @@ class HexagonDelegateProvider : public DelegateProvider {
                              ToolParam::Create<std::string>("/data/local/tmp"));
     default_params_.AddParam("hexagon_profiling",
                              ToolParam::Create<bool>(false));
+    default_params_.AddParam("hexagon_powersave_level",
+                             ToolParam::Create<int>(255));
 #endif
   }
 
@@ -58,7 +60,8 @@ std::vector<Flag> HexagonDelegateProvider::CreateFlags(
           "hexagon_lib_path", params,
           "The library path for the underlying Hexagon libraries."),
       CreateFlag<bool>("hexagon_profiling", params,
-                       "Enables Hexagon profiling")};
+                       "Enables Hexagon profiling"),
+      CreateFlag<int>("hexagon_powersave_level", params, "Hexagon powersave_level")};
   return flags;
 #else
   return {};
@@ -73,6 +76,7 @@ void HexagonDelegateProvider::LogParams(const ToolParams& params,
                  verbose);
   LOG_TOOL_PARAM(params, bool, "hexagon_profiling", "Hexagon profiling",
                  verbose);
+  LOG_TOOL_PARAM(params, int, "hexagon_powersave_level", "Hexagon powersave_level", verbose);
 #endif
 }
 
@@ -87,6 +91,7 @@ TfLiteDelegatePtr HexagonDelegateProvider::CreateTfLiteDelegate(
         params.Get<int>("max_delegated_partitions");
     options.min_nodes_per_partition =
         params.Get<int>("min_nodes_per_partition");
+    options.powersave_level = params.Get<int>("hexagon_powersave_level");
     delegate = evaluation::CreateHexagonDelegate(
         &options, params.Get<std::string>("hexagon_lib_path"));
 

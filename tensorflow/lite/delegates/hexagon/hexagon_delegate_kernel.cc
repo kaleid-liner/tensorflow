@@ -70,7 +70,7 @@ TfLiteStatus HexagonDelegateKernel::Init(TfLiteContext* context,
     TF_LITE_KERNEL_LOG(context, "Failed to set debug level, error: %d", error);
     return kTfLiteError;
   }
-  error = hexagon_nn_->hexagon_nn_set_powersave_level(255);
+  error = hexagon_nn_->hexagon_nn_set_powersave_level(params_.powersave_level);
   if (error != 0) {
     TF_LITE_KERNEL_LOG(context, "Failed to set powersave level, error %d",
                        error);
