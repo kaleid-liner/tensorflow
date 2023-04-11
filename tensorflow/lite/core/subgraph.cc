@@ -246,7 +246,8 @@ Subgraph::Subgraph(ErrorReporter* error_reporter,
       energy_profiler_(100),
       enable_cpu_(false),
       enable_dsp_(false),
-      enable_gpu_(false) {
+      enable_gpu_(false),
+      enable_mp_(false) {
   context_.impl_ = static_cast<void*>(this);
   context_.ResizeTensor = ResizeTensor;
   context_.ReportError = ReportErrorC;
@@ -1281,6 +1282,7 @@ TfLiteStatus Subgraph::Invoke() {
         }
         if (node_name.find("mp_end") != std::string::npos) {
           flag |= kMPFlagEnd;
+          enable_mp_ = true;
         }
         if (!(flag & kMPFlagStart) && !(flag & kMPFlagEnd)) {
           flag |= kMPFlagSeq;
@@ -1366,7 +1368,7 @@ TfLiteStatus Subgraph::Invoke() {
     tensor_resized_since_op_invoke_ = false;
     // std::cout << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
     unsigned char mp_flag = mp_flags_[node_index];
-    if (mp_flag & kMPFlagEnd) {
+    if ((mp_flag & kMPFlagEnd) && enable_mp_) {
       if (gpu_index < gpu_nodes_.size()) {
         int gpu_node_index = gpu_nodes_[gpu_index];
         TfLiteNode& next_gpu_node = nodes_and_registration_[gpu_node_index].first;
@@ -1400,10 +1402,10 @@ TfLiteStatus Subgraph::Invoke() {
       }
       state = kMPFlagEnd;
     }
-    if (mp_flag & kMPFlagStart) {
+    if ((mp_flag & kMPFlagStart) && enable_mp_) {
       state = kMPFlagStart;
     }
-    if (mp_flag & kMPFlagSeq) {
+    if ((mp_flag & kMPFlagSeq) && enable_mp_) {
       switch (state) {
         case kMPFlagStart:
           if (mp_flag & kMPFlagCpu) {
@@ -1470,8 +1472,8 @@ TfLiteStatus Subgraph::Invoke() {
     std::cout << "DSP stage " << i << ": waiting for " << dsp_wait_ms[i].count() << std::endl;
   }
 
-  std::cout << energy_profiler_.GetAvgPower() << std::endl;
-  std::cout << energy_profiler_.GetMovingPower() << std::endl;
+  std::cout << "#Power (avg): " << energy_profiler_.GetAvgPower() << std::endl;
+  std::cout << "#Power (moving): " << energy_profiler_.GetMovingPower() << std::endl;
 
   for (int i : gpu_nodes_) {
     TfLiteNode& gpu_node = nodes_and_registration_[i].first;

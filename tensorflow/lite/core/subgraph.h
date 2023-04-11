@@ -780,6 +780,8 @@ class Subgraph {
 
   bool enable_cpu_, enable_gpu_, enable_dsp_;
 
+  bool enable_mp_;
+
   std::vector<int> gpu_nodes_;
 
   ctpl::thread_pool dsp_thread_;
