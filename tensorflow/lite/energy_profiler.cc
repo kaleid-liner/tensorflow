@@ -19,7 +19,11 @@ int ReadFromFile(std::string filename) {
   std::string content;
   fs >> content;
   if (content.empty()) {
-    return ReadFromFile(USB_CURRENT_FALLBACK);
+    if (filename != USB_CURRENT_FALLBACK) {
+      return ReadFromFile(USB_CURRENT_FALLBACK);
+    } else {
+      return 0;
+    }
   }
   return std::stoi(content);
 }
