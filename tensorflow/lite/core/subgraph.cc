@@ -27,6 +27,7 @@ limitations under the License.
 #include <string>
 #include <utility>
 #include <vector>
+#include <iostream>
 
 #include "tensorflow/lite/allocation.h"
 #include "tensorflow/lite/builtin_ops.h"
@@ -238,7 +239,8 @@ Subgraph::Subgraph(ErrorReporter* error_reporter,
       subgraphs_(subgraphs),
       resources_(resources),
       resource_ids_(resource_ids),
-      initialization_status_map_(initialization_status_map) {
+      initialization_status_map_(initialization_status_map),
+      energy_profiler_(100) {
   context_.impl_ = static_cast<void*>(this);
   context_.ResizeTensor = ResizeTensor;
   context_.ReportError = ReportErrorC;
@@ -1154,6 +1156,7 @@ TfLiteStatus Subgraph::Invoke() {
     ReportError("Non-persistent memory is not available.");
     return kTfLiteError;
   }
+  energy_profiler_.Resume();
   TFLITE_SCOPED_TAGGED_DEFAULT_PROFILE(profiler_.get(), "Invoke");
 
   // Invocations are always done in node order.
@@ -1243,6 +1246,10 @@ TfLiteStatus Subgraph::Invoke() {
     // Release dynamic tensor memory if configured by the user.
     MaybeReleaseDynamicInputs(node, node_index);
   }
+
+  energy_profiler_.Pause();
+  std::cout << "#Power (avg): " << energy_profiler_.GetAvgPower() << std::endl;
+  std::cout << "#Power (moving): " << energy_profiler_.GetMovingPower() << std::endl;
 
   return status;
 }

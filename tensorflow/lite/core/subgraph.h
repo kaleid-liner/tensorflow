@@ -36,6 +36,8 @@ limitations under the License.
 #include "tensorflow/lite/graph_info.h"
 #include "tensorflow/lite/memory_planner.h"
 #include "tensorflow/lite/util.h"
+#include "tensorflow/lite/ctpl_stl.h"
+#include "tensorflow/lite/energy_profiler.h"
 
 namespace tflite {
 
@@ -758,6 +760,8 @@ class Subgraph {
 
   // Array of indices representing the tensors that are variable tensors.
   std::vector<int> variables_;
+
+  jianyu::EnergyProfiler energy_profiler_;
 
   // The error reporter delegate that tflite will forward queries errors to.
   ErrorReporter* error_reporter_;
