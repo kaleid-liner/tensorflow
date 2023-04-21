@@ -428,11 +428,12 @@ TfLiteStatus Subgraph::ReplaceNodeSubsetsWithDelegateKernels(
     char* c_node_name;
     GetNodeName(&node, &c_node_name);
     std::string node_name = c_node_name;
+    int original_node_index = info.node_index(node_index);
     if (node_name.find("mp_start") != std::string::npos) {
-      mp_start_nodes.push_back(node_index);
+      mp_start_nodes.push_back(original_node_index);
     }
     if (node_name.find("mp_end") != std::string::npos) {
-      mp_end_nodes.push_back(node_index);
+      mp_end_nodes.push_back(original_node_index);
     }
   }
 
@@ -628,7 +629,7 @@ TfLiteStatus Subgraph::PreviewDelegatePartitioning(
   std::vector<int> mp_start_nodes;
   std::vector<int> mp_end_nodes;
   for (auto node_index : TfLiteIntArrayView(nodes_to_replace)) {
-    const TfLiteNode& node = info.node(node_index);
+    const TfLiteNode& node = nodes_and_registration_[node_index].first;
     char* c_node_name;
     GetNodeName(&node, &c_node_name);
     std::string node_name = c_node_name;
@@ -1257,7 +1258,6 @@ TfLiteStatus Subgraph::Invoke() {
 
       // jianyu: assign device and plan execution according to node name
       if (mp_flags_.find(node_index) == mp_flags_.end()) {
-        // std::cout << node_index << std::endl;
         char* c_node_name;
         GetNodeName(&node, &c_node_name);
         std::string node_name = c_node_name;
@@ -1289,7 +1289,6 @@ TfLiteStatus Subgraph::Invoke() {
         }
         delete [] c_node_name;
         mp_flags_[node_index] = flag;
-        // std::cout << node_name << ": " << (int)flag << std::endl;
       }
     }
 

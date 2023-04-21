@@ -247,8 +247,7 @@ class PartitionGraphIntoIndependentNodeSubsetsImpl {
         // Check if mp_end node
         int original_node_index = info_->node_index(node_index);
         auto iter = std::find(mp_end_nodes_->begin(), mp_end_nodes_->end(), original_node_index);
-        if (CanUpdate(node_index) && iter != mp_end_nodes_->end()) {
-          mp_end_nodes_->erase(iter);
+        if (iter != mp_end_nodes_->end() && !node_subsets_->back().nodes.empty()) {
           return;
         }
         if (UpdateNode(node_index)) {
