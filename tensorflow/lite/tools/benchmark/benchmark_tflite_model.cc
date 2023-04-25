@@ -274,6 +274,7 @@ CreateProfileSummaryFormatter(bool format_as_csv) {
 BenchmarkParams BenchmarkTfLiteModel::DefaultParams() {
   BenchmarkParams default_params = BenchmarkModel::DefaultParams();
   default_params.AddParam("graph", BenchmarkParam::Create<std::string>(""));
+  default_params.AddParam("dg_graph", BenchmarkParam::Create<std::string>(""));
   default_params.AddParam("input_layer",
                           BenchmarkParam::Create<std::string>(""));
   default_params.AddParam("input_layer_shape",
@@ -312,7 +313,9 @@ BenchmarkParams BenchmarkTfLiteModel::DefaultParams() {
 
 BenchmarkTfLiteModel::BenchmarkTfLiteModel(BenchmarkParams params)
     : BenchmarkModel(std::move(params)),
-      random_engine_(std::random_device()()) {
+      random_engine_(std::random_device()()),
+      cur_device_(0),
+      switch_threshold_(1.0) {
   AddListener(&log_output_);
 }
 
@@ -327,12 +330,14 @@ BenchmarkTfLiteModel::~BenchmarkTfLiteModel() {
   // Destory the owned interpreter earlier than other objects (specially
   // 'owned_delegates_').
   interpreter_.reset();
+  s_interpreter_.reset();
 }
 
 std::vector<Flag> BenchmarkTfLiteModel::GetFlags() {
   std::vector<Flag> flags = BenchmarkModel::GetFlags();
   std::vector<Flag> specific_flags = {
       CreateFlag<std::string>("graph", &params_, "graph file name"),
+      CreateFlag<std::string>("dg_graph", &params_, "graph file name for DSP-GPU"),
       CreateFlag<std::string>("input_layer", &params_, "input layer names"),
       CreateFlag<std::string>("input_layer_shape", &params_,
                               "input layer shape"),
@@ -393,6 +398,7 @@ void BenchmarkTfLiteModel::LogParams() {
   const bool verbose = params_.Get<bool>("verbose");
   // Always log the value of --graph.
   LOG_BENCHMARK_PARAM(std::string, "graph", "Graph", /*verbose*/ true);
+  LOG_BENCHMARK_PARAM(std::string, "dg_graph", "DG Graph", /*verbose*/ true);
   LOG_BENCHMARK_PARAM(std::string, "input_layer", "Input layers", verbose);
   LOG_BENCHMARK_PARAM(std::string, "input_layer_shape", "Input shapes",
                       verbose);
@@ -455,7 +461,7 @@ uint64_t BenchmarkTfLiteModel::ComputeInputBytes() {
 }
 
 int64_t BenchmarkTfLiteModel::MayGetModelFileSize() {
-  std::ifstream in_file(params_.Get<std::string>("graph"),
+  std::ifstream in_file(GetGraph(),
                         std::ios::binary | std::ios::ate);
   return in_file.tellg();
 }
@@ -605,155 +611,163 @@ TfLiteStatus BenchmarkTfLiteModel::InitInterpreter() {
 }
 
 TfLiteStatus BenchmarkTfLiteModel::Init() {
-  TF_LITE_ENSURE_STATUS(LoadModel());
-  TF_LITE_ENSURE_STATUS(InitInterpreter());
+  for (int i = 0; i <= 1; ++i) {
+    if (i == 1 && !DGAvailable()) break;
+    Switch(i);
 
-  // Install profilers if necessary right after interpreter is created so that
-  // any memory allocations inside the TFLite runtime could be recorded if the
-  // installed profiler profile memory usage information.
+    TF_LITE_ENSURE_STATUS(LoadModel());
+    TF_LITE_ENSURE_STATUS(InitInterpreter());
 
-  // Adjust "max_profiling_buffer_entries" according to the loaded model.
-  int total_nodes = 0;
-  for (int i = 0; i < interpreter_->subgraphs_size(); ++i) {
-    // subgraph(...) is non-const member method.
-    total_nodes += static_cast<int>(interpreter_->subgraph(i)->nodes_size());
-  }
-  if (total_nodes > params_.Get<int32_t>("max_profiling_buffer_entries")) {
-    constexpr int kProfilingBufferHeadrooms = 512;
-    params_.Set<int32_t>("max_profiling_buffer_entries",
-                         total_nodes + kProfilingBufferHeadrooms);
-  }
+    // Install profilers if necessary right after interpreter is created so that
+    // any memory allocations inside the TFLite runtime could be recorded if the
+    // installed profiler profile memory usage information.
 
-  AddOwnedListener(MayCreateProfilingListener());
-  AddOwnedListener(std::unique_ptr<BenchmarkListener>(
-      new InterpreterStatePrinter(interpreter_.get())));
+    // Adjust "max_profiling_buffer_entries" according to the loaded model.
+    int total_nodes = 0;
+    for (int i = 0; i < interpreter_->subgraphs_size(); ++i) {
+      // subgraph(...) is non-const member method.
+      total_nodes += static_cast<int>(interpreter_->subgraph(i)->nodes_size());
+    }
+    if (total_nodes > params_.Get<int32_t>("max_profiling_buffer_entries")) {
+      constexpr int kProfilingBufferHeadrooms = 512;
+      params_.Set<int32_t>("max_profiling_buffer_entries",
+                          total_nodes + kProfilingBufferHeadrooms);
+    }
 
-  interpreter_->SetAllowFp16PrecisionForFp32(params_.Get<bool>("allow_fp16"));
+    AddOwnedListener(MayCreateProfilingListener());
+    AddOwnedListener(std::unique_ptr<BenchmarkListener>(
+        new InterpreterStatePrinter(interpreter_.get())));
 
-  InterpreterOptions options;
-  options.SetEnsureDynamicTensorsAreReleased(
-      params_.Get<bool>("release_dynamic_tensors"));
-  options.SetDynamicAllocationForLargeTensors(
-      params_.Get<int32_t>("use_dynamic_tensors_for_large_tensors"));
-  interpreter_->ApplyOptions(&options);
+    interpreter_->SetAllowFp16PrecisionForFp32(params_.Get<bool>("allow_fp16"));
 
-  owned_delegates_.clear();
+    InterpreterOptions options;
+    options.SetEnsureDynamicTensorsAreReleased(
+        params_.Get<bool>("release_dynamic_tensors"));
+    options.SetDynamicAllocationForLargeTensors(
+        params_.Get<int32_t>("use_dynamic_tensors_for_large_tensors"));
+    interpreter_->ApplyOptions(&options);
 
-  // Contains all ids of TfLiteNodes that have been checked to see whether it's
-  // delegated or not.
-  std::unordered_set<int> checked_node_ids;
-  tools::ProvidedDelegateList delegate_providers(&params_);
-  auto created_delegates = delegate_providers.CreateAllRankedDelegates();
-  TFLITE_MAY_LOG(INFO, (created_delegates.size() >= 2))
-      << "Going to apply " << created_delegates.size()
-      << " delegates one after another.";
-  for (auto& created_delegate : created_delegates) {
-    const auto* delegate_provider = created_delegate.provider;
-    tools::TfLiteDelegatePtr delegate = std::move(created_delegate.delegate);
-    TFLITE_TOOLS_CHECK(delegate != nullptr)
-        << "The created delegate by the delegate provider should not be "
-           "nullptr!";
-    if (interpreter_->ModifyGraphWithDelegate(delegate.get()) != kTfLiteOk) {
-      TFLITE_LOG(ERROR) << "Failed to apply " << delegate_provider->GetName()
-                        << " delegate.";
-      return kTfLiteError;
-    } else {
-      // Ideally, such delegate info should already be computed when the
-      // delegate is being applied to the model graph.
-      int num_delegated_kernels = 0;
-      for (int i = 0; i < interpreter_->execution_plan().size(); ++i) {
-        int node_id = interpreter_->execution_plan()[i];
-        if (checked_node_ids.find(node_id) != checked_node_ids.end()) {
-          continue;
+    owned_delegates_.clear();
+
+    // Contains all ids of TfLiteNodes that have been checked to see whether it's
+    // delegated or not.
+    std::unordered_set<int> checked_node_ids;
+    tools::ProvidedDelegateList delegate_providers(&params_);
+    auto created_delegates = delegate_providers.CreateAllRankedDelegates();
+    TFLITE_MAY_LOG(INFO, (created_delegates.size() >= 2))
+        << "Going to apply " << created_delegates.size()
+        << " delegates one after another.";
+    for (auto& created_delegate : created_delegates) {
+      const auto* delegate_provider = created_delegate.provider;
+      tools::TfLiteDelegatePtr delegate = std::move(created_delegate.delegate);
+      TFLITE_TOOLS_CHECK(delegate != nullptr)
+          << "The created delegate by the delegate provider should not be "
+            "nullptr!";
+      if (interpreter_->ModifyGraphWithDelegate(delegate.get()) != kTfLiteOk) {
+        TFLITE_LOG(ERROR) << "Failed to apply " << delegate_provider->GetName()
+                          << " delegate.";
+        return kTfLiteError;
+      } else {
+        // Ideally, such delegate info should already be computed when the
+        // delegate is being applied to the model graph.
+        int num_delegated_kernels = 0;
+        for (int i = 0; i < interpreter_->execution_plan().size(); ++i) {
+          int node_id = interpreter_->execution_plan()[i];
+          if (checked_node_ids.find(node_id) != checked_node_ids.end()) {
+            continue;
+          }
+          const TfLiteNode& node =
+              interpreter_->node_and_registration(node_id)->first;
+
+          // Note that the 'delegate' here could be an ExternalDelegateWrapper
+          // object that wraps an actual external delegate, in which case,
+          // 'node.delegate' will be different from 'delegate' because
+          // 'node.delegate' refers to the actual external delegate.
+          if (node.delegate != nullptr) {
+            num_delegated_kernels++;
+            checked_node_ids.insert(node_id);
+          }
         }
-        const TfLiteNode& node =
-            interpreter_->node_and_registration(node_id)->first;
+        bool fully_delegated = (num_delegated_kernels == 1 &&
+                                interpreter_->execution_plan().size() == 1);
 
-        // Note that the 'delegate' here could be an ExternalDelegateWrapper
-        // object that wraps an actual external delegate, in which case,
-        // 'node.delegate' will be different from 'delegate' because
-        // 'node.delegate' refers to the actual external delegate.
-        if (node.delegate != nullptr) {
-          num_delegated_kernels++;
-          checked_node_ids.insert(node_id);
+        if (params_.Get<bool>("require_full_delegation") && !fully_delegated) {
+          TFLITE_LOG(ERROR) << "Disallowed CPU fallback detected.";
+          return kTfLiteError;
+        }
+        if (fully_delegated) {
+          TFLITE_LOG(INFO) << "Explicitly applied "
+                          << delegate_provider->GetName()
+                          << " delegate, and the model graph will be completely"
+                          << " executed by the delegate.";
+        } else if (num_delegated_kernels > 0) {
+          TFLITE_LOG(INFO) << "Explicitly applied "
+                          << delegate_provider->GetName()
+                          << " delegate, and the model graph will be partially"
+                          << " executed by the delegate w/ "
+                          << num_delegated_kernels << " delegate kernels.";
+        } else {
+          TFLITE_LOG(INFO)
+              << "Though " << delegate_provider->GetName()
+              << " delegate is explicitly applied, the model graph will not be"
+              << " executed by the delegate.";
         }
       }
-      bool fully_delegated = (num_delegated_kernels == 1 &&
-                              interpreter_->execution_plan().size() == 1);
+      owned_delegates_.emplace_back(std::move(delegate));
+    }
 
-      if (params_.Get<bool>("require_full_delegation") && !fully_delegated) {
-        TFLITE_LOG(ERROR) << "Disallowed CPU fallback detected.";
+    auto interpreter_inputs = interpreter_->inputs();
+
+    if (!inputs_.empty()) {
+      TFLITE_TOOLS_CHECK_EQ(inputs_.size(), interpreter_inputs.size())
+          << "Inputs mismatch: Model inputs #:" << inputs_.size()
+          << " expected: " << interpreter_inputs.size();
+    }
+
+    // Check if the tensor names match, and log a warning if it doesn't.
+    for (int j = 0; j < inputs_.size(); ++j) {
+      const InputLayerInfo& input = inputs_[j];
+      int i = interpreter_inputs[j];
+      TfLiteTensor* t = interpreter_->tensor(i);
+      if (input.name != t->name) {
+        TFLITE_LOG(WARN) << "Tensor # " << i << " is named " << t->name
+                        << " but flags call it " << input.name;
+      }
+
+      if (t->type != kTfLiteString && input.shape.size() != t->dims->size) {
+        TFLITE_LOG(ERROR) << "Input tensor #" << i << " should have "
+                          << t->dims->size << " dimensions!";
         return kTfLiteError;
       }
-      if (fully_delegated) {
-        TFLITE_LOG(INFO) << "Explicitly applied "
-                         << delegate_provider->GetName()
-                         << " delegate, and the model graph will be completely"
-                         << " executed by the delegate.";
-      } else if (num_delegated_kernels > 0) {
-        TFLITE_LOG(INFO) << "Explicitly applied "
-                         << delegate_provider->GetName()
-                         << " delegate, and the model graph will be partially"
-                         << " executed by the delegate w/ "
-                         << num_delegated_kernels << " delegate kernels.";
-      } else {
-        TFLITE_LOG(INFO)
-            << "Though " << delegate_provider->GetName()
-            << " delegate is explicitly applied, the model graph will not be"
-            << " executed by the delegate.";
+    }
+
+    // Resize all non-string tensors.
+    for (int j = 0; j < inputs_.size(); ++j) {
+      const InputLayerInfo& input = inputs_[j];
+      int i = interpreter_inputs[j];
+      TfLiteTensor* t = interpreter_->tensor(i);
+      if (t->type != kTfLiteString) {
+        interpreter_->ResizeInputTensor(i, input.shape);
       }
     }
-    owned_delegates_.emplace_back(std::move(delegate));
-  }
 
-  auto interpreter_inputs = interpreter_->inputs();
-
-  if (!inputs_.empty()) {
-    TFLITE_TOOLS_CHECK_EQ(inputs_.size(), interpreter_inputs.size())
-        << "Inputs mismatch: Model inputs #:" << inputs_.size()
-        << " expected: " << interpreter_inputs.size();
-  }
-
-  // Check if the tensor names match, and log a warning if it doesn't.
-  for (int j = 0; j < inputs_.size(); ++j) {
-    const InputLayerInfo& input = inputs_[j];
-    int i = interpreter_inputs[j];
-    TfLiteTensor* t = interpreter_->tensor(i);
-    if (input.name != t->name) {
-      TFLITE_LOG(WARN) << "Tensor # " << i << " is named " << t->name
-                       << " but flags call it " << input.name;
-    }
-
-    if (t->type != kTfLiteString && input.shape.size() != t->dims->size) {
-      TFLITE_LOG(ERROR) << "Input tensor #" << i << " should have "
-                        << t->dims->size << " dimensions!";
+    if (interpreter_->AllocateTensors() != kTfLiteOk) {
+      TFLITE_LOG(ERROR) << "Failed to allocate tensors!";
       return kTfLiteError;
     }
+
+    AddOwnedListener(
+        std::unique_ptr<BenchmarkListener>(new RuyProfileListener()));
   }
 
-  // Resize all non-string tensors.
-  for (int j = 0; j < inputs_.size(); ++j) {
-    const InputLayerInfo& input = inputs_[j];
-    int i = interpreter_inputs[j];
-    TfLiteTensor* t = interpreter_->tensor(i);
-    if (t->type != kTfLiteString) {
-      interpreter_->ResizeInputTensor(i, input.shape);
-    }
-  }
-
-  if (interpreter_->AllocateTensors() != kTfLiteOk) {
-    TFLITE_LOG(ERROR) << "Failed to allocate tensors!";
-    return kTfLiteError;
-  }
-
-  AddOwnedListener(
-      std::unique_ptr<BenchmarkListener>(new RuyProfileListener()));
+  ResetJiffies();
+  GetCPUUsage();
 
   return kTfLiteOk;
 }
 
 TfLiteStatus BenchmarkTfLiteModel::LoadModel() {
-  std::string graph = params_.Get<std::string>("graph");
+  std::string graph = GetGraph();
   model_ = tflite::FlatBufferModel::BuildFromFile(graph.c_str());
   if (!model_) {
     TFLITE_LOG(ERROR) << "Failed to mmap model " << graph;
@@ -793,7 +807,16 @@ BenchmarkTfLiteModel::MayCreateProfilingListener() const {
           !params_.Get<std::string>("profiling_output_csv_file").empty())));
 }
 
-TfLiteStatus BenchmarkTfLiteModel::RunImpl() { return interpreter_->Invoke(); }
+TfLiteStatus BenchmarkTfLiteModel::RunImpl() { 
+  TF_LITE_ENSURE_STATUS(interpreter_->Invoke());
+  double usage = GetCPUUsage();
+  if (usage > 1 and DGAvailable()) {
+    Switch(1);
+  } else {
+    Switch(0);
+  }
+  return kTfLiteOk;
+}
 
 }  // namespace benchmark
 }  // namespace tflite
