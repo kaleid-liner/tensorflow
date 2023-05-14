@@ -229,6 +229,7 @@ absl::Status CLCommandQueue::WaitForCompletion() {
     return absl::UnknownError(
         absl::StrCat("Failed to clFinish - ", CLErrorCodeToString(error_code)));
   }
+  LogEventsTime();
   return absl::OkStatus();
 }
 
@@ -396,13 +397,8 @@ absl::Status CreateCLCommandQueue(const CLDevice& device,
                                   const CLContext& context,
                                   CLCommandQueue* result) {
   int error_code;
-#ifdef IS_PROFILING
   cl_command_queue queue = clCreateCommandQueue(
       context.context(), device.id(), CL_QUEUE_PROFILING_ENABLE, &error_code);
-#else
-  cl_command_queue queue = clCreateCommandQueue(
-      context.context(), device.id(), 0, &error_code);
-#endif
   if (!queue) {
     return absl::UnknownError(
         absl::StrCat("Failed to create a command queue - ",
